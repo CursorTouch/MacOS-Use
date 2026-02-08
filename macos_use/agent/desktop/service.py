@@ -16,6 +16,7 @@ import requests
 import subprocess
 import Quartz
 import logging
+import time
 import os
 
 logger = logging.getLogger(__name__)
@@ -322,8 +323,11 @@ class Desktop:
         active_window = self.get_active_window(windows)
         
         # Get accessibility tree state
+        # Pass the active PID so the tree uses the same (reliable) frontmost app
+        # instead of re-querying NSWorkspace which can return stale data.
+        active_pid = active_window.pid if active_window else None
         window_name = active_window.name if active_window else ''
-        tree_state = self.tree.get_state(window_name=window_name)
+        tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid)
         
         # Capture screenshot if requested
         screenshot = None
@@ -441,25 +445,66 @@ class Desktop:
         
         return windows
 
+    def _get_frontmost_pid(self) -> Optional[int]:
+        """Get the PID of the frontmost application using CGWindowListCopyWindowInfo.
+        
+        This queries the window server directly and does not rely on
+        NSWorkspace (which can return stale data without an active NSRunLoop).
+        It finds the topmost on-screen, normal-level window that belongs to
+        a regular application.
+        """
+        window_list = Quartz.CGWindowListCopyWindowInfo(
+            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+            Quartz.kCGNullWindowID
+        )
+        if not window_list:
+            return None
+
+        for win_info in window_list:
+            # Normal windows live at layer 0; skip menu-bar items, overlays, etc.
+            layer = win_info.get(Quartz.kCGWindowLayer, -1)
+            if layer != 0:
+                continue
+            pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
+            if pid:
+                return pid
+
+        return None
+
     def get_active_window(self, windows: list[Window] = None) -> Optional[Window]:
-        """Get the currently active/focused window."""
+        """Get the currently active/focused window.
+        
+        Uses CGWindowListCopyWindowInfo to reliably determine which app
+        owns the topmost window, avoiding stale NSWorkspace state.
+        Falls back to NSWorkspace.frontmostApplication() if the window
+        server query doesn't yield a match.
+        """
+        frontmost_pid = self._get_frontmost_pid()
+
+        # Try to match the PID against our known windows list
+        if frontmost_pid and windows:
+            for window in windows:
+                if window.pid == frontmost_pid:
+                    return window
+
+        # Fallback: use NSWorkspace (may be stale but still useful as last resort)
         workspace = NSWorkspace.sharedWorkspace()
         frontmost = workspace.frontmostApplication()
-        
+
         if not frontmost:
             return None
-            
+
         if windows:
             for window in windows:
                 if window.pid == frontmost.processIdentifier():
                     return window
-        
+
         # Create window from frontmost app
         app_name = frontmost.localizedName()
         bundle_id = frontmost.bundleIdentifier() or ''
         pid = frontmost.processIdentifier()
         is_browser = bundle_id in BROWSER_BUNDLE_IDS
-        
+
         return Window(
             name=app_name,
             is_browser=is_browser,
@@ -554,24 +599,64 @@ class Desktop:
             return f"Application '{name}' not found"
         return f"Failed to launch '{name}': Application not found"
 
+    def _resolve_app_pid(self, name: str) -> Optional[int]:
+        """Resolve an application name to its PID (if currently running)."""
+        workspace = NSWorkspace.sharedWorkspace()
+        for app in workspace.runningApplications():
+            if app.localizedName() == name:
+                return app.processIdentifier()
+        return None
+
+    def _wait_for_app_focus(self, target_pid: int, timeout: float = 3.0, interval: float = 0.2) -> bool:
+        """Poll the window server until *target_pid* owns the topmost window.
+
+        Returns True if the app became frontmost within *timeout* seconds.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            frontmost_pid = self._get_frontmost_pid()
+            if frontmost_pid == target_pid:
+                return True
+            time.sleep(interval)
+        return False
+
     def switch_app(self, name: str) -> str:
-        """Switch to an application by name."""
+        """Switch to an application by name.
+
+        After sending the activation command, polls the window server to
+        verify that the target app actually became the frontmost window
+        before returning.
+        """
+        target_pid = self._resolve_app_pid(name)
+
         # Try AppleScript first as it's more robust for switching and unminimizing
         applescript = f'tell application "{name}" to activate'
         try:
             subprocess.run(['osascript', '-e', applescript], check=True, capture_output=True)
-            return f"Switched to {name}"
         except subprocess.CalledProcessError:
             # Fallback to NSWorkspace if AppleScript fails
-            workspace = NSWorkspace.sharedWorkspace()
-            running_apps = workspace.runningApplications()
-            
-            for app in running_apps:
-                if app.localizedName() == name:
-                    app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-                    return f"Switched to {name}"
+            if target_pid is not None:
+                workspace = NSWorkspace.sharedWorkspace()
+                for app in workspace.runningApplications():
+                    if app.processIdentifier() == target_pid:
+                        app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                        break
+                else:
+                    return f"Application '{name}' not found running"
+            else:
+                return f"Application '{name}' not found running"
+
+        # Wait for macOS to actually complete the focus transition
+        if target_pid is not None:
+            if self._wait_for_app_focus(target_pid):
+                return f"Switched to {name}"
+            else:
+                logger.warning(f"Timed out waiting for '{name}' (PID {target_pid}) to become frontmost")
+                return f"Switched to {name} (focus may be delayed)"
         
-        return f"Application '{name}' not found running"
+        # Could not resolve PID; add a small grace period as best-effort
+        time.sleep(0.5)
+        return f"Switched to {name}"
 
     def resize_app(self, loc: tuple[int, int] = None, size: tuple[int, int] = None) -> str:
         """Resize the active window (requires Accessibility permissions)."""
@@ -651,7 +736,17 @@ class Desktop:
         x, y = loc
         pg.moveTo(x, y)
         if clicks > 0:
+            time.sleep(0.05)
             pg.click(x=x, y=y, button=button, clicks=clicks)
+
+    @staticmethod
+    def _is_truthy(value) -> bool:
+        """Convert a value to bool, handling string 'true'/'false' from LLM tool calls."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.lower() == 'true'
+        return bool(value)
 
     def type(
         self,
@@ -663,6 +758,10 @@ class Desktop:
     ):
         """
         Type text at the specified coordinates.
+
+        Uses the macOS clipboard (pbcopy + Cmd-V) instead of simulating
+        individual key presses, which avoids focus-loss, Unicode issues,
+        and keyboard-layout problems that affect pyautogui.typewrite().
         
         Args:
             loc: (x, y) coordinates to click before typing.
@@ -671,6 +770,10 @@ class Desktop:
             clear: If True, clear existing text before typing.
             press_enter: If True, press Enter after typing.
         """
+        # Normalise string 'true'/'false' coming from the LLM tool call
+        clear = self._is_truthy(clear)
+        press_enter = self._is_truthy(press_enter)
+
         x, y = loc
         pg.click(x=x, y=y)
         
@@ -683,7 +786,7 @@ class Desktop:
         elif caret_position == 'end':
             pg.hotkey('command', 'right')
         
-        pg.typewrite(text, interval=0.02)
+        pg.typewrite(text,interval=0.05)
         
         if press_enter:
             pg.press('enter')
