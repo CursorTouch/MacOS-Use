@@ -20,8 +20,9 @@ import logging
 import time
 
 logger = logging.getLogger("macos_use")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)  # Allow all levels; handlers will filter
 handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)  # Console stays clean with INFO
 formatter = logging.Formatter('[%(levelname)s] %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
@@ -128,12 +129,26 @@ class Agent(BaseAgent):
         scale = min(scale_width, scale_height)
 
         desktop_state = self.desktop.get_state(scale=scale)
+        
+        # Log rich state info
+        logger.info(f"[Agent] 🖥️  Desktop State (Step {self.state.step + 1})")
+        logger.info(f"Active Window: {desktop_state.active_window.name if desktop_state.active_window else 'None'}")
+        logger.info(f"Windows Found:\n{desktop_state.windows_to_string()}")
+        
+        if self.desktop.use_accessibility and desktop_state.tree_state:
+            num_elements = len(desktop_state.tree_state.interactive_nodes)
+            logger.info(f"Interactive Elements Found: {num_elements}")
+            # Full element tree is logged to DEBUG (file only)
+            logger.debug(f"Full Accessibility Tree:\n{desktop_state.tree_state.interactive_elements_to_string()}")
+
         content = self.prompt.human(
             query=self.state.task,
             step=self.state.step,
             max_steps=self.state.max_steps,
             desktop=self.desktop,
         )
+        # Log the final markdown prompt sent to LLM for debugging purposes
+        logger.debug(f"Final Prompt Content:\n{content}")
         if self.desktop.use_vision and desktop_state.screenshot:
             image = desktop_state.screenshot
             return ImageMessage(image=image, content=content)
@@ -307,6 +322,12 @@ class Agent(BaseAgent):
             logger.addHandler(file_handler)
         result = None
         logger.info(f"[Agent] 🔍 Query: {query}")
+        
+        # Log detailed system environment at the start
+        width, height = self.desktop.get_screen_size().width, self.desktop.get_screen_size().height
+        logger.info(f"[Agent] 💻 Environment: {self.desktop.get_macos_version()}")
+        logger.info(f"[Agent] ⚙️  System Info: Resolution={width}x{height}, DPI={self.desktop.get_dpi_scaling()}, Language={self.desktop.get_default_language()}")
+        
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
                 self.watchdog.set_focus_callback(self.desktop.tree.on_focus_changed)
