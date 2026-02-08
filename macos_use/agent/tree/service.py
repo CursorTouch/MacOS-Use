@@ -195,10 +195,18 @@ class Tree:
         
         return False
 
-    def get_state(self, window_name: str = '') -> TreeState:
+    def get_state(self, window_name: str = '', active_pid: Optional[int] = None) -> TreeState:
         """
         Capture the current accessibility tree state using parallel traversal.
         Returns a TreeState with interactive and scrollable elements.
+
+        Args:
+            window_name: Name of the active window (used as fallback label).
+            active_pid: PID of the frontmost application as determined by the
+                        Desktop service (via CGWindowListCopyWindowInfo). When
+                        provided, this is used instead of
+                        NSWorkspace.frontmostApplication() which can return
+                        stale data when no NSRunLoop is running.
         """
         interactive_elements: list[TreeElementNode] = []
         scrollable_elements: list[ScrollElementNode] = []
@@ -237,14 +245,29 @@ class Tree:
         else:
             # Normal mode - scan all sources
             
-            # Get frontmost application
-            frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
-            if not frontmost:
-                logger.warning("No frontmost application found")
-                return TreeState()
+            # Resolve the frontmost application PID and name.
+            # Prefer the active_pid supplied by Desktop (from CGWindowListCopyWindowInfo)
+            # because NSWorkspace.frontmostApplication() can return stale data when
+            # the Python process doesn't run an NSRunLoop.
+            pid = None
+            app_name = window_name or ''
 
-            pid = frontmost.processIdentifier()
-            app_name = frontmost.localizedName()
+            if active_pid:
+                pid = active_pid
+                # Resolve the human-readable app name from the PID
+                for app in apps:
+                    if app.processIdentifier() == active_pid:
+                        app_name = app.localizedName()
+                        break
+            else:
+                # Fallback to NSWorkspace
+                frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
+                if not frontmost:
+                    logger.warning("No frontmost application found")
+                    return TreeState()
+                pid = frontmost.processIdentifier()
+                app_name = frontmost.localizedName()
+
             ax_app = AXUIElementCreateApplication(pid)
 
             # Try to get focused/main window
