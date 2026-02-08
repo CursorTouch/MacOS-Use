@@ -52,8 +52,6 @@ class Prompt:
             'cursor_location': f'({cursor_location.x},{cursor_location.y})',
             'interactive_elements': desktop_state.tree_state.interactive_elements_to_string() if desktop.use_accessibility else 'No accessability data is available',
             'scrollable_elements': desktop_state.tree_state.scrollable_elements_to_string() if desktop.use_accessibility else 'No accessability data is available',
-            'active_desktop': desktop_state.active_desktop_to_string(),
-            'desktops': desktop_state.desktops_to_string(),
             'query':query
         })
 

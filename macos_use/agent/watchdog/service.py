@@ -304,7 +304,7 @@ class WatchDog:
         self.thread = Thread(target=self._run, name=f"WatchDogThread-{self._instance_id}")
         self.thread.daemon = True
         self.thread.start()
-        logger.info(f"WatchDog service started (instance {self._instance_id})")
+        logger.debug(f"WatchDog service started (instance {self._instance_id})")
     
     def stop(self):
         """Stop the watchdog service thread."""
@@ -319,7 +319,7 @@ class WatchDog:
         # Unregister this instance
         _watchdog_registry.pop(self._instance_id, None)
         
-        logger.info(f"WatchDog service stopped (instance {self._instance_id})")
+        logger.debug(f"WatchDog service stopped (instance {self._instance_id})")
     
     def set_focus_callback(self, callback: Optional[Callable]):
         """
@@ -490,4 +490,4 @@ class WatchDog:
                         pass
                 self._app_observers.clear()
                 self._observed_pids.clear()
-            logger.info(f"WatchDog thread exited (instance {self._instance_id})")
+            logger.debug(f"WatchDog thread exited (instance {self._instance_id})")

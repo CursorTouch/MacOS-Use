@@ -3,8 +3,6 @@
 [End of Agent State]
     
 [Begin of Desktop]
-    Active Desktop: {active_desktop}
-    
     Cursor Location: {cursor_location}
     
     [Begin of Window Info]
@@ -21,11 +19,6 @@
         List of Scrollable Elements:
         {scrollable_elements}
     [End of Screen]
-    
-    [Begin of Virtual Desktops]
-        Virtual Desktops:
-        {desktops}
-    [End of Virtual Desktops]
 [End of Desktop]
 
 [Begin of User Query]
