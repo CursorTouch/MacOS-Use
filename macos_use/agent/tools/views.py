@@ -17,12 +17,12 @@ class SharedBaseModel(BaseModel):
 class App(SharedBaseModel):
     mode: Literal['launch', 'resize', 'switch'] = Field(
         'launch',
-        description="Operation mode: 'launch' opens the application from Start Menu, 'resize' adjusts the active window's size and position, 'switch' brings a specific open window into the foreground",
+        description="Operation mode: 'launch' opens the application, 'resize' adjusts the active window's size and position, 'switch' brings a specific open window into the foreground",
         examples=['launch']
     )
     name: Optional[str] = Field(
-        description="Application name as it appears in Start Menu (for launch) or the window title as shown in the taskbar (for switch/resize). Example: 'Notepad' to launch, 'Untitled - Notepad' to switch.",
-        examples=['Notepad', 'Google Chrome', 'Untitled - Notepad'],
+        description="Application name as it appears in the Applications folder or Dock (for launch/switch). Example: 'Safari' or 'WhatsApp'.",
+        examples=['Safari', 'WhatsApp', 'Cursor'],
         default=None
     )
     loc: Optional[list[int]] = Field(
@@ -96,12 +96,12 @@ class Click(SharedBaseModel):
 class Shell(SharedBaseModel):
     command: str = Field(
         ...,
-        description="PowerShell command to execute. Runs in the user's HOME directory. Use for file operations, system queries, installations, and automation tasks.",
+        description="Shell command to execute in Terminal. Runs in the user's HOME directory.",
         examples=[
-            'Get-Process',
-            'ls Desktop',
-            'Get-ChildItem -Path C:\\Users -Recurse',
-            'echo "Hello World"'
+            'ls -la ~/Downloads',
+            'pkill WhatsApp',
+            'open -a WhatsApp',
+            'sw_vers'
         ]
     )
     timeout: Optional[int] = Field(
@@ -139,7 +139,7 @@ class Type(SharedBaseModel):
 
 class MultiSelect(SharedBaseModel):
     press_ctrl: bool = Field(
-        description="If true, holds Ctrl while clicking each element to accumulate a multi-selection (files, checkboxes, list items). If false, clicks each location sequentially without Ctrl.",
+        description="If true, holds the Command (⌘) key while clicking each element to accumulate a multi-selection (files, checkboxes, list items). If false, clicks each location sequentially without Command.",
         default=False,
         examples=[True, False]
     )
@@ -193,8 +193,8 @@ class Move(SharedBaseModel):
 class Shortcut(SharedBaseModel):
     shortcut: str = Field(
         ...,
-        description="Keyboard shortcut to press. Use '+' to combine keys for simultaneous press. Examples: 'ctrl+c' for copy, 'alt+tab' for window switch, 'enter' for confirm, 'escape' for cancel.",
-        examples=['enter', 'escape', 'ctrl+c', 'ctrl+v', 'alt+tab', 'ctrl+shift+n', 'win']
+        description="Keyboard shortcut to press. Use '+' to combine keys for simultaneous press. Examples: 'command+c' for copy, 'command+tab' for window switch, 'enter' for confirm, 'escape' for cancel.",
+        examples=['enter', 'escape', 'command+c', 'command+v', 'command+tab', 'command+shift+n']
     )
 
 class Wait(SharedBaseModel):

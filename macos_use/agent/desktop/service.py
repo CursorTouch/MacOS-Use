@@ -556,13 +556,20 @@ class Desktop:
 
     def switch_app(self, name: str) -> str:
         """Switch to an application by name."""
-        workspace = NSWorkspace.sharedWorkspace()
-        running_apps = workspace.runningApplications()
-        
-        for app in running_apps:
-            if app.localizedName() == name:
-                app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-                return f"Switched to {name}"
+        # Try AppleScript first as it's more robust for switching and unminimizing
+        applescript = f'tell application "{name}" to activate'
+        try:
+            subprocess.run(['osascript', '-e', applescript], check=True, capture_output=True)
+            return f"Switched to {name}"
+        except subprocess.CalledProcessError:
+            # Fallback to NSWorkspace if AppleScript fails
+            workspace = NSWorkspace.sharedWorkspace()
+            running_apps = workspace.runningApplications()
+            
+            for app in running_apps:
+                if app.localizedName() == name:
+                    app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                    return f"Switched to {name}"
         
         return f"Application '{name}' not found running"
 
@@ -744,11 +751,14 @@ class Desktop:
             shortcut: Key combination separated by '+' (e.g., 'command+c', 'command+shift+s').
         """
         keys = shortcut.lower().split('+')
-        # Map common Windows keys to macOS
+        # Map common Windows and alias keys to macOS PyAutoGUI keys
         key_mapping = {
             'ctrl': 'command',
+            'cmd': 'command',
+            'command': 'command',
             'win': 'command',
             'alt': 'option',
+            'opt': 'option',
         }
         mapped_keys = [key_mapping.get(k, k) for k in keys]
         pg.hotkey(*mapped_keys)
