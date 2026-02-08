@@ -74,6 +74,57 @@ class Desktop:
         height = Quartz.CGDisplayPixelsHigh(main_display)
         return Size(width=width, height=height)
 
+    def get_macos_version(self) -> str:
+        """Get the macOS version."""
+        try:
+            result = subprocess.run(['sw_vers', '-productVersion'], capture_output=True, text=True)
+            version = result.stdout.strip()
+            name_result = subprocess.run(['sw_vers', '-productName'], capture_output=True, text=True)
+            name = name_result.stdout.strip()
+            return f"{name} {version}"
+        except Exception:
+            return "macOS"
+
+    def get_dpi_scaling(self) -> str:
+        """Get the scale factor of the main display."""
+        try:
+            # On macOS, we can get this from the backing scale factor of the main screen
+            # or just assume 2.0 for Retina if we can't get it easily.
+            # Using Quartz to find the scale factor.
+            main_display = Quartz.CGMainDisplayID()
+            # This doesn't directly give scale, but we can check the pixel width vs point width
+            pixel_width = Quartz.CGDisplayPixelsWide(main_display)
+            bounds = Quartz.CGDisplayBounds(main_display)
+            point_width = bounds.size.width
+            scale = round(pixel_width / point_width, 1)
+            return f"{scale}x"
+        except Exception:
+            return "1.0x"
+
+    def get_default_language(self) -> str:
+        """Get the default system language."""
+        try:
+            result = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'], capture_output=True, text=True)
+            # Output is like "(en-US, ...)"
+            langs = result.stdout.strip()
+            if langs.startswith('('):
+                first_lang = langs.split(',')[0].strip('() "')
+                return first_lang
+            return "en-US"
+        except Exception:
+            return "en-US"
+
+    def get_user_account_type(self) -> str:
+        """Check if the current user is an admin."""
+        try:
+            user = os.getlogin()
+            result = subprocess.run(['dscl', '.', '-read', '/Groups/admin', 'GroupMembership'], capture_output=True, text=True)
+            if user in result.stdout:
+                return "Admin"
+            return "Standard"
+        except Exception:
+            return "User"
+
     def get_screenshot(self, as_bytes: bool = False, scale: float = 1.0):
         """
         Capture a screenshot of the desktop (all screens).
@@ -85,13 +136,33 @@ class Desktop:
         Returns:
             Screenshot as bytes or PIL Image.
         """
-        # Use ImageGrab to capture all screens
+        # Use Quartz to capture the screen directly (no temp files, no screencapture CLI)
         try:
-            # all_screens=True captures the combined virtual screen
-            img = ImageGrab.grab(all_screens=True)
+            # CGWindowListCreateImage captures the full virtual screen
+            cg_image = Quartz.CGWindowListCreateImage(
+                Quartz.CGRectInfinite,
+                Quartz.kCGWindowListOptionOnScreenOnly,
+                Quartz.kCGNullWindowID,
+                Quartz.kCGWindowImageDefault,
+            )
+            if cg_image is None:
+                raise RuntimeError(
+                    "CGWindowListCreateImage returned None – "
+                    "grant Screen Recording permission in "
+                    "System Settings > Privacy & Security > Screen Recording"
+                )
+            width = Quartz.CGImageGetWidth(cg_image)
+            height = Quartz.CGImageGetHeight(cg_image)
+            bytes_per_row = Quartz.CGImageGetBytesPerRow(cg_image)
+            pixel_data = Quartz.CGDataProviderCopyData(
+                Quartz.CGImageGetDataProvider(cg_image)
+            )
+            img = Image.frombuffer(
+                "RGBA", (width, height), pixel_data, "raw", "BGRA", bytes_per_row, 1
+            )
         except Exception as e:
-            logger.warning(f"Failed to capture all screens, falling back to main screen: {e}")
-            img = pg.screenshot()
+            logger.warning(f"Quartz screen capture failed, falling back to ImageGrab: {e}")
+            img = ImageGrab.grab(all_screens=True)
         
         # Apply scaling if needed
         if scale < 1.0:
@@ -125,8 +196,10 @@ class Desktop:
         if screenshot is None:
             return None
             
-        # Calculate virtual screen origin to offset global coordinates
+        # Calculate virtual screen origin and DPI scale factor
         min_x, min_y = 0, 0
+        max_logical_x, max_logical_y = 0, 0
+        dpi_scale = 1.0
         try:
             max_displays = 32
             # (error, display_ids, count)
@@ -137,8 +210,17 @@ class Desktop:
                     bounds = Quartz.CGDisplayBounds(display_id)
                     x = bounds.origin.x
                     y = bounds.origin.y
+                    w = bounds.size.width
+                    h = bounds.size.height
                     if x < min_x: min_x = int(x)
                     if y < min_y: min_y = int(y)
+                    max_logical_x = max(max_logical_x, x + w)
+                    max_logical_y = max(max_logical_y, y + h)
+                # Compute DPI scale from actual screenshot pixels vs logical screen size
+                # This is the most reliable method as CGDisplayPixelsWide can be unreliable
+                logical_width = max_logical_x - min_x
+                if logical_width > 0:
+                    dpi_scale = screenshot.width / logical_width
         except Exception as e:
             logger.warning(f"Failed to get display bounds: {e}")
         
@@ -150,7 +232,7 @@ class Desktop:
         padded_screenshot.paste(screenshot, (padding, padding))
         
         draw = ImageDraw.Draw(padded_screenshot)
-        font_size = 12
+        font_size = int(12 * dpi_scale)
         try:
             # Try to load a system font
             font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', font_size)
@@ -167,12 +249,12 @@ class Desktop:
             box = node.bounding_box
             color = get_random_color()
             
-            # Adjust for virtual screen origin and padding
-            # coordinates = (global_coord - min_coord) + padding
-            left = int(box.left - min_x) + padding
-            top = int(box.top - min_y) + padding
-            right = int(box.right - min_x) + padding
-            bottom = int(box.bottom - min_y) + padding
+            # Adjust for virtual screen origin, Retina DPI scale, and padding
+            # Accessibility coordinates are in logical points; screenshot is in physical pixels
+            left = int((box.left - min_x) * dpi_scale) + padding
+            top = int((box.top - min_y) * dpi_scale) + padding
+            right = int((box.right - min_x) * dpi_scale) + padding
+            bottom = int((box.bottom - min_y) * dpi_scale) + padding
             
             adjusted_box = (left, top, right, bottom)
             

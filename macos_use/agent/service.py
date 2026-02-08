@@ -1,4 +1,5 @@
 from macos_use.messages import SystemMessage, HumanMessage, AIMessage, ImageMessage, ToolMessage
+from macos_use.agent.desktop.config import MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT
 from macos_use.agent.tools import BUILTIN_TOOLS, EXPERIMENTAL_TOOLS
 from macos_use.agent.views import AgentResult, AgentState
 from macos_use.telemetry.service import ProductTelemetry
@@ -121,7 +122,13 @@ class Agent(BaseAgent):
 
     @property
     def state_message(self) -> HumanMessage | ImageMessage:
-        desktop_state = self.desktop.get_state()
+        # Calculate scale factor to cap resolution at 1080p
+        screen_size = self.desktop.get_screen_size()
+        scale_width = MAX_IMAGE_WIDTH / screen_size.width if screen_size.width > MAX_IMAGE_WIDTH else 1.0
+        scale_height = MAX_IMAGE_HEIGHT / screen_size.height if screen_size.height > MAX_IMAGE_HEIGHT else 1.0
+        scale = min(scale_width, scale_height)
+
+        desktop_state = self.desktop.get_state(scale=scale)
         content = self.prompt.human(
             query=self.state.task,
             step=self.state.step,

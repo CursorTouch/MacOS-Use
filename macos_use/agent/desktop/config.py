@@ -18,14 +18,20 @@ AVOIDED_APPS: set[str] = {
 }
 
 # System processes to exclude from window listing
-# System processes to exclude from window listing
 EXCLUDED_BUNDLE_IDS: set[str] = {
-    'com.apple.dock',
-    'com.apple.WindowServer',
-    'com.apple.systemuiserver',
-    'com.apple.controlcenter',
-    'com.apple.notificationcenterui',
-    'com.apple.Spotlight',
+    "com.apple.loginwindow",
+    "com.apple.dock",
+    "com.apple.systemuiserver",
+    "com.apple.controlcenter",
+    "com.apple.notificationcenterui",
+    "com.apple.Spotlight",
+    "com.apple.ScreenSaver.Engine",
+    "com.apple.WindowManager",
+    "com.apple.TextInputMenuBar",
+    "com.apple.TextInputMenuAgent",
+    "com.apple.AirPlayUIAgent",
+    "com.apple.PowerChime",
+    "com.apple.BezelServices",
 }
 
 # Max image dimensions for screenshots
