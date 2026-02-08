@@ -319,8 +319,9 @@ class Desktop:
             DesktopState with windows, active window, tree state, and optional screenshot.
         """
         # Get running applications and their windows
-        windows = self.get_windows()
-        active_window = self.get_active_window(windows)
+        # get_windows now returns a tuple (windows, frontmost_pid)
+        windows, frontmost_pid = self.get_windows()
+        active_window = self.get_active_window(windows, frontmost_pid=frontmost_pid)
         
         # Get accessibility tree state
         # Pass the active PID so the tree uses the same (reliable) frontmost app
@@ -353,17 +354,34 @@ class Desktop:
         
         return self.desktop_state
 
-    def get_windows(self) -> list[Window]:
-        """Get list of user-facing application windows on the desktop."""
+    def get_windows(self) -> tuple[list[Window], Optional[int]]:
+        """
+        Get list of user-facing application windows on the desktop.
+        Returns (windows, frontmost_pid).
+        """
         windows = []
         workspace = NSWorkspace.sharedWorkspace()
         
         # Get window list from Quartz - includes on-screen windows
+        # Returned in order from front to back
         window_list = Quartz.CGWindowListCopyWindowInfo(
             Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
             Quartz.kCGNullWindowID
         )
         
+        # Identify frontmost PID from z-order
+        frontmost_pid = None
+        if window_list:
+            for win_info in window_list:
+                # Normal windows live at layer 0; skip menu-bar items, overlays, etc.
+                layer = win_info.get(Quartz.kCGWindowLayer, -1)
+                if layer != 0:
+                    continue
+                pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
+                if pid:
+                    frontmost_pid = pid
+                    break
+
         # Create a mapping of PID to window info
         pid_windows = {}
         for win_info in window_list or []:
@@ -443,7 +461,7 @@ class Desktop:
                 bundle_id=bundle_id,
             ))
         
-        return windows
+        return windows, frontmost_pid
 
     def _get_frontmost_pid(self) -> Optional[int]:
         """Get the PID of the frontmost application using CGWindowListCopyWindowInfo.
@@ -471,15 +489,16 @@ class Desktop:
 
         return None
 
-    def get_active_window(self, windows: list[Window] = None) -> Optional[Window]:
-        """Get the currently active/focused window.
-        
-        Uses CGWindowListCopyWindowInfo to reliably determine which app
-        owns the topmost window, avoiding stale NSWorkspace state.
-        Falls back to NSWorkspace.frontmostApplication() if the window
-        server query doesn't yield a match.
+    def get_active_window(self, windows: list[Window] = None, frontmost_pid: Optional[int] = None) -> Optional[Window]:
         """
-        frontmost_pid = self._get_frontmost_pid()
+        Get the currently active/focused window.
+        
+        Args:
+            windows: Optional list of known windows to search in.
+            frontmost_pid: Optional known frontmost PID to avoid re-querying.
+        """
+        if frontmost_pid is None:
+            frontmost_pid = self._get_frontmost_pid()
 
         # Try to match the PID against our known windows list
         if frontmost_pid and windows:

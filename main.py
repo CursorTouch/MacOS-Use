@@ -4,12 +4,16 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-agent = Agent(
-    llm=ChatAnthropic(
-        model="claude-haiku-4-5",
-    ),
-    log_to_file=True,
-)
-query=input("Enter your query: ")
-result=agent.invoke(query)
-print(result)
+def main():
+    agent = Agent(
+        llm=ChatAnthropic(
+            model="claude-haiku-4-5",
+        ),
+        log_to_file=True,
+    )
+    query=input("Enter your query: ")
+    result=agent.invoke(query)
+    print(result)
+
+if __name__ == "__main__":
+    main()

@@ -148,16 +148,17 @@ class Tree:
             return False
         return any(action in INTERACTIVE_ACTIONS for action in actions)
 
-    def is_launchpad_open(self) -> bool:
+    def _check_launchpad_and_get_dock(self, apps) -> tuple:
         """
-        Check if Launchpad is currently active (visible).
-        Launchpad is a special overlay that hides the desktop.
+        Check if Launchpad is active and return its element and the dock AX application.
+        Returns (launchpad_element, ax_dock).
+        launchpad_element is None if Launchpad is not active.
+        ax_dock is None if Dock is not running.
         """
-        apps = NSWorkspace.sharedWorkspace().runningApplications()
-        dock_app = next((app for app in apps if app.localizedName() == "Dock"), None)
+        dock_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.dock"), None)
         if not dock_app:
-            return False
-        
+            return None, None
+            
         pid = dock_app.processIdentifier()
         ax_dock = AXUIElementCreateApplication(pid)
         children = self.get_children(ax_dock)
@@ -169,8 +170,9 @@ class Tree:
                 # Found the Launchpad group. Check if it's visible.
                 is_hidden = self.get_attr(child, 'AXHidden')
                 if is_hidden is not True:
-                    return True
-        return False
+                    return child, ax_dock
+                    
+        return None, ax_dock
 
     def is_window_fullscreen(self, window) -> bool:
         """
@@ -214,33 +216,21 @@ class Tree:
         # Get all running apps
         apps = NSWorkspace.sharedWorkspace().runningApplications()
 
-        # Check if Launchpad is open - if so, only scan Launchpad and Dock
-        launchpad_active = self.is_launchpad_open()
+        # Check if Launchpad is open and get launchpad/dock elements
+        # This avoids redundant checks and race conditions
+        launchpad_element, ax_dock = self._check_launchpad_and_get_dock(apps)
 
         # Prepare tasks for parallel execution
         tasks = []
 
-        # Get Dock app (needed for both Launchpad detection and Dock scanning)
-        dock_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.dock"), None)
-        
-        if launchpad_active:
+        if launchpad_element:
             # Launchpad is open - only scan Launchpad content and Dock
             logger.info("Launchpad is active - scanning only Launchpad and Dock")
             
-            if dock_app:
-                dock_pid = dock_app.processIdentifier()
-                ax_dock = AXUIElementCreateApplication(dock_pid)
-                
-                # Find and scan the Launchpad group
-                children = self.get_children(ax_dock)
-                for child in children:
-                    role = self.get_attr(child, kAXRoleAttribute)
-                    title = self.get_attr(child, kAXTitleAttribute)
-                    if role == 'AXGroup' and title == 'Launchpad':
-                        tasks.append(('launchpad', child, 'Launchpad', None))
-                        break
-                
-                # Also scan the Dock itself
+            tasks.append(('launchpad', launchpad_element, 'Launchpad', None))
+            
+            # Also scan the Dock itself
+            if ax_dock:
                 tasks.append(('dock', ax_dock, 'Dock', None))
         else:
             # Normal mode - scan all sources
@@ -297,9 +287,7 @@ class Tree:
 
             # Task 2: Scan Dock (skip if window is fullscreen/maximized)
             is_fullscreen = self.is_window_fullscreen(focused_window)
-            if dock_app and not is_fullscreen:
-                dock_pid = dock_app.processIdentifier()
-                ax_dock = AXUIElementCreateApplication(dock_pid)
+            if ax_dock and not is_fullscreen:
                 tasks.append(('dock', ax_dock, 'Dock', None))
 
             # Task 3: Scan Menu Bar of frontmost app
@@ -527,7 +515,7 @@ class Tree:
         # 2. It has interactive actions (AXPress, AXConfirm, etc.), OR
         # 3. It has a window control subrole (close, minimize, zoom buttons)
         is_interactive = (
-            (role in INTERACTIVE_ROLES and is_enabled) or 
+            (role in INTERACTIVE_ROLES and is_enabled is not False) or 
             has_actions or 
             subrole in WINDOW_CONTROL_SUBROLES
         )
