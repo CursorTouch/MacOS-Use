@@ -7,7 +7,8 @@ load_dotenv()
 agent = Agent(
     llm=ChatAnthropic(
         model="claude-haiku-4-5",
-    )
+    ),
+    log_to_file=True,
 )
 query=input("Enter your query: ")
 result=agent.invoke(query)
