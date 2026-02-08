@@ -28,6 +28,7 @@ dependencies = [
     "python-dotenv>=1.2.1",
     "uuid7>=0.1.0",
     "posthog>=7.8.3",
+    "ipykernel>=7.2.0",
 ]
 
 [project.scripts]
