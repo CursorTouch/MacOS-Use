@@ -90,9 +90,8 @@ class Agent(BaseAgent):
         if use_annotation and not use_accessibility:
             logger.warning("use_accessibility is set to True if use_annotation is True.")
         self.desktop = Desktop(
-            use_vision=True if use_annotation else use_vision,
             use_annotation=use_annotation,
-            use_accessibility=True if use_annotation else use_accessibility,
+            use_vision=use_vision,
         )
         self.state = AgentState(
             max_consecutive_failures=max_consecutive_failures,
@@ -310,7 +309,7 @@ class Agent(BaseAgent):
         logger.info(f"[Agent] 🔍 Query: {query}")
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
-                self.watchdog.set_focus_callback(self.desktop.tree.on_focus_change)
+                self.watchdog.set_focus_callback(self.desktop.tree.on_focus_changed)
                 with self.watchdog:
                     result = self.loop()
             if result.is_done:
@@ -324,4 +323,4 @@ class Agent(BaseAgent):
             if file_handler:
                 logger.removeHandler(file_handler)
                 file_handler.close()
-            return result
+        return result

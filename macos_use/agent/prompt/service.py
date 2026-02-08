@@ -27,7 +27,7 @@ class Prompt:
                     'datetime': datetime.now().strftime('%A, %B %d, %Y'),
                     'instructions': '\n'.join(instructions),
                     'download_directory': Path.home().joinpath('Downloads').as_posix(),
-                    'os':desktop.get_os_version(),
+                    'os':desktop.get_macos_version(),
                     'language':desktop.get_default_language(),
                     'browser':browser.value,
                     'home_dir':Path.home().as_posix(),

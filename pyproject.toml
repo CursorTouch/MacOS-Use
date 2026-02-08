@@ -8,6 +8,7 @@ dependencies = [
     "pyautogui>=0.9.54",
     "pyobjc-framework-Quartz>=10.1",
     "pyobjc-framework-Cocoa>=10.1",
+    "pyobjc-framework-ApplicationServices>=10.1",
     "pillow>=10.2.0",
     "requests>=2.31.0",
     "markdownify>=0.11.6",
@@ -24,6 +25,9 @@ dependencies = [
     "anthropic>=0.68.1",
     "litellm>=1.72.0",
     "mistralai>=1.9.11",
+    "python-dotenv>=1.2.1",
+    "uuid7>=0.1.0",
+    "posthog>=7.8.3",
 ]
 
 [project.scripts]

@@ -1,6 +1,14 @@
-def main():
-    print("Hello from macos-use!")
+from macos_use.llms.anthropic import ChatAnthropic
+from macos_use.agent import Agent,Browser
+from dotenv import load_dotenv
 
+load_dotenv()
 
-if __name__ == "__main__":
-    main()
+agent = Agent(
+    llm=ChatAnthropic(
+        model="claude-haiku-4-5",
+    )
+)
+query=input("Enter your query: ")
+result=agent.invoke(query)
+print(result)

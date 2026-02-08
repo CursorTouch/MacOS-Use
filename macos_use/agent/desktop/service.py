@@ -31,7 +31,10 @@ class Desktop:
     Manages desktop state capture, application control, and input actions.
     """
 
-    def __init__(self):
+    def __init__(self, use_accessibility: bool = True, use_annotation: bool = True, use_vision: bool = False):
+        self.use_accessibility = use_accessibility
+        self.use_annotation = use_annotation
+        self.use_vision = use_vision
         self.tree = Tree(self)
         self.desktop_state: Optional[DesktopState] = None
 
