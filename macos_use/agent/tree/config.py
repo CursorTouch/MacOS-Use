@@ -18,7 +18,7 @@ INTERACTIVE_ROLES = {
     'AXMenuItem',
     'AXMenuBarItem',
     'AXTab',
-    'AXImage',
+    # 'AXImage',
     'AXDockItem',
     'AXCell',
     'AXRow',
