@@ -156,14 +156,17 @@ def memory_tool(mode: Literal['view','read','write','delete','update'],path: Opt
     return "Invalid mode. Use 'view', 'read', 'write', 'update', or 'delete'."
 
 @Tool('shell_tool',model=Shell)
-def shell_tool(command: str,timeout:int=10,**kwargs) -> str:
+def shell_tool(command: str,mode:Literal['shell','osascript']='shell',timeout:int=10,**kwargs) -> str:
     '''
-    Executes a PowerShell command and returns the output and exit status code. Working directory is the user's HOME.
+    Executes a command and returns the output and exit status code.
 
-    Use for file operations, system queries, installations, running scripts, and any task better done via command line than GUI. Check the status code in the response: 0 means success, non-zero means failure.
+    - shell: Runs a bash command in Terminal. Working directory is the user's HOME. Use for file operations, system queries, installations, running scripts, and any task better done via command line than GUI.
+    - osascript: Executes AppleScript code. Use for advanced macOS automation such as controlling apps, manipulating windows, interacting with System Events, displaying dialogs, or querying app-specific properties.
+
+    Check the status code in the response: 0 means success, non-zero means failure.
     '''
     desktop:_Desktop=kwargs['desktop']
-    response,status=desktop.execute_command(command,timeout=timeout)
+    response,status=desktop.execute_command(command,mode=mode,timeout=timeout)
     return f'Response: {response}\nStatus Code: {status}'
 
 @Tool('click_tool',model=Click)

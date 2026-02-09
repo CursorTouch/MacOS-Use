@@ -94,14 +94,21 @@ class Click(SharedBaseModel):
     )
 
 class Shell(SharedBaseModel):
+    mode: Literal['shell', 'osascript'] = Field(
+        'shell',
+        description="Execution mode: 'shell' runs a bash command in Terminal, 'osascript' executes AppleScript code via osascript.",
+        examples=['shell', 'osascript']
+    )
     command: str = Field(
         ...,
-        description="Shell command to execute in Terminal. Runs in the user's HOME directory.",
+        description="The command or script to execute. For 'shell' mode: a bash command. For 'osascript' mode: AppleScript code.",
         examples=[
             'ls -la ~/Downloads',
             'pkill WhatsApp',
             'open -a WhatsApp',
-            'sw_vers'
+            'sw_vers',
+            'tell application "Finder" to get name of every window',
+            'tell application "System Events" to get name of every process whose frontmost is true'
         ]
     )
     timeout: Optional[int] = Field(
