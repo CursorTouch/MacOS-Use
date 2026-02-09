@@ -6,6 +6,14 @@ from pathlib import Path
 from time import sleep
 
 memory_path=Path.cwd()/'.memories'
+memory_path.mkdir(parents=True, exist_ok=True)
+
+def _resolve_memory_path(path: str) -> Path:
+    """Resolve a memory file path, always sandboxed within .memories directory."""
+    file_path = (memory_path / path).resolve()
+    if not str(file_path).startswith(str(memory_path.resolve())):
+        raise ValueError(f"Path escapes the .memories directory: {path}")
+    return file_path
 
 @Tool('done_tool',model=Done)
 def done_tool(answer:str,**kwargs):
@@ -52,19 +60,30 @@ def memory_tool(mode: Literal['view','read','write','delete','update'],path: Opt
     '''
     match mode:
         case 'view':
-            files = (Path(path) if path else memory_path).rglob('*.md')
-            result = '\n'.join([f'{i+1}. {file.relative_to(memory_path.parent).as_posix()}' 
+            search_dir = (memory_path / path).resolve() if path else memory_path
+            if not str(search_dir).startswith(str(memory_path.resolve())):
+                return "Error: path escapes the .memories directory."
+            if not search_dir.exists():
+                return "No memory files found."
+            files = search_dir.rglob('*.md')
+            result = '\n'.join([f'{i+1}. {file.relative_to(memory_path).as_posix()}' 
                                for i, file in enumerate(files)])
             return result if result else "No memory files found."
         
         case 'write':
-            file_path = memory_path / path if not Path(path).is_absolute() else Path(path)
+            if not path:
+                return "Error: path is required for write mode."
+            if not path.endswith('.md'):
+                path += '.md'
+            file_path = _resolve_memory_path(path)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding='utf-8')
-            return f'{file_path.name} created in {file_path.parent.relative_to(memory_path.parent).as_posix()}.'
+            return f'{file_path.name} created in {file_path.parent.relative_to(memory_path).as_posix()}.'
         
         case 'read':
-            file_path = memory_path / path if not Path(path).is_absolute() else Path(path)
+            if not path:
+                return "Error: path is required for read mode."
+            file_path = _resolve_memory_path(path)
             if not file_path.exists():
                 return f'Error: {file_path.name} not found.'
             
@@ -80,12 +99,14 @@ def memory_tool(mode: Literal['view','read','write','delete','update'],path: Opt
                     return f'Error: end line {end} out of range ({start}-{len(lines)}).'
                 
                 selected_lines = lines[start:end]
-                return f"File: {file_path.relative_to(memory_path.parent).as_posix()}\nLines {start}-{end-1}:\n" + '\n'.join(selected_lines)
+                return f"File: {file_path.relative_to(memory_path).as_posix()}\nLines {start}-{end-1}:\n" + '\n'.join(selected_lines)
             
-            return f"File: {file_path.relative_to(memory_path.parent).as_posix()}\nContent:\n{file_content}"
+            return f"File: {file_path.relative_to(memory_path).as_posix()}\nContent:\n{file_content}"
         
         case 'update':
-            file_path = memory_path / path if not Path(path).is_absolute() else Path(path)
+            if not path:
+                return "Error: path is required for update mode."
+            file_path = _resolve_memory_path(path)
             if not file_path.exists():
                 return f'Error: {file_path.name} not found. Use "write" mode to create a new file.'
             
@@ -100,7 +121,9 @@ def memory_tool(mode: Literal['view','read','write','delete','update'],path: Opt
                     
                     new_content = current_content.replace(old_str, new_str)
                     file_path.write_text(new_content, encoding='utf-8')
-                    return f'{file_path.name} updated: replaced "{old_str[:50]}..." with "{new_str[:50]}...".'
+                    old_display = f'"{old_str[:50]}{"..." if len(old_str) > 50 else ""}"'
+                    new_display = f'"{new_str[:50]}{"..." if len(new_str) > 50 else ""}"'
+                    return f'{file_path.name} updated: replaced {old_display} with {new_display}.'
                 
                 case 'insert':
                     if line_number is None:
@@ -121,14 +144,16 @@ def memory_tool(mode: Literal['view','read','write','delete','update'],path: Opt
                     return f'Error: Unknown operation "{operation}".'
         
         case 'delete':
-            file_path = memory_path / path if not Path(path).is_absolute() else Path(path)
+            if not path:
+                return "Error: path is required for delete mode."
+            file_path = _resolve_memory_path(path)
             if not file_path.exists():
                 return f'Error: {file_path.name} not found.'
             
             file_path.unlink()
-            return f'{file_path.name} deleted from {file_path.parent.relative_to(memory_path.parent).as_posix()}.'
+            return f'{file_path.name} deleted from {file_path.parent.relative_to(memory_path).as_posix()}.'
         
-    return "Invalid mode. Use 'view', 'write', 'read', 'update', or 'delete'."
+    return "Invalid mode. Use 'view', 'read', 'write', 'update', or 'delete'."
 
 @Tool('shell_tool',model=Shell)
 def shell_tool(command: str,timeout:int=10,**kwargs) -> str:
