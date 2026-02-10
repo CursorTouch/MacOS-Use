@@ -131,13 +131,13 @@ class Agent(BaseAgent):
         desktop_state = self.desktop.get_state(scale=scale)
         
         # Log rich state info
-        logger.info(f"[Agent] 🖥️  Desktop State (Step {self.state.step + 1})")
-        logger.info(f"Active Window: {desktop_state.active_window.name if desktop_state.active_window else 'None'}")
-        logger.info(f"Windows Found:\n{desktop_state.windows_to_string()}")
+        logger.debug(f"[Agent] 🖥️  Desktop State (Step {self.state.step + 1})")
+        logger.debug(f"Active Window: {desktop_state.active_window.name if desktop_state.active_window else 'None'}")
+        logger.debug(f"Windows Found:\n{desktop_state.windows_to_string()}")
         
         if self.desktop.use_accessibility and desktop_state.tree_state:
             num_elements = len(desktop_state.tree_state.interactive_nodes)
-            logger.info(f"Interactive Elements Found: {num_elements}")
+            logger.debug(f"Interactive Elements Found: {num_elements}")
             # Full element tree is logged to DEBUG (file only)
             logger.debug(f"Full Accessibility Tree:\n{desktop_state.tree_state.interactive_elements_to_string()}")
 
@@ -325,8 +325,8 @@ class Agent(BaseAgent):
         
         # Log detailed system environment at the start
         width, height = self.desktop.get_screen_size().width, self.desktop.get_screen_size().height
-        logger.info(f"[Agent] 💻 Environment: {self.desktop.get_macos_version()}")
-        logger.info(f"[Agent] ⚙️  System Info: Resolution={width}x{height}, DPI={self.desktop.get_dpi_scaling()}, Language={self.desktop.get_default_language()}")
+        logger.debug(f"[Agent] 💻 Environment: {self.desktop.get_macos_version()}")
+        logger.debug(f"[Agent] ⚙️  System Info: Resolution={width}x{height}, DPI={self.desktop.get_dpi_scaling()}, Language={self.desktop.get_default_language()}")
         
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
