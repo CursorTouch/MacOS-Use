@@ -69,6 +69,10 @@ class ChatAzureOpenAI(BaseChatLLM):
     def provider(self) -> str:
         return "azure_openai"
 
+    def _is_reasoning_model(self) -> bool:
+        """Check if the deployment is a reasoning model (o-series: o1, o3, o4, etc.)."""
+        return self._deployment.startswith(("o1", "o3", "o4"))
+
     def _convert_messages(self, messages: List[BaseMessage]) -> List[dict]:
         """
         Convert BaseMessage objects to Azure-compatible message dictionaries.
@@ -135,11 +139,27 @@ class ChatAzureOpenAI(BaseChatLLM):
         message = choice.message
         usage_data = response.usage
         
+        # Capture reasoning tokens if available (o-series models)
+        reasoning_tokens = None
+        if hasattr(usage_data, "completion_tokens_details") and usage_data.completion_tokens_details:
+            reasoning_tokens = getattr(
+                usage_data.completion_tokens_details, "reasoning_tokens", None
+            )
+
         usage = ChatLLMUsage(
             prompt_tokens=usage_data.prompt_tokens,
             completion_tokens=usage_data.completion_tokens,
-            total_tokens=usage_data.total_tokens
+            total_tokens=usage_data.total_tokens,
+            reasoning_tokens=reasoning_tokens,
         )
+        
+        # Extract thinking/reasoning content (for o-series models)
+        thinking = None
+        if self._is_reasoning_model():
+            if hasattr(message, 'reasoning_content'):
+                thinking = message.reasoning_content
+            elif hasattr(choice, 'reasoning_content'):
+                thinking = choice.reasoning_content
         
         content = None
         if hasattr(message, 'tool_calls') and message.tool_calls:
@@ -156,9 +176,13 @@ class ChatAzureOpenAI(BaseChatLLM):
             )
         else:
             content = AIMessage(content=message.content or "")
+        
+        if thinking and hasattr(content, 'thinking'):
+            content.thinking = thinking
             
         return ChatLLMResponse(
             content=content,
+            thinking=thinking,
             usage=usage
         )
 
@@ -180,7 +204,8 @@ class ChatAzureOpenAI(BaseChatLLM):
         if openai_tools:
             params["tools"] = openai_tools
         
-        if self.temperature is not None:
+        # Reasoning models don't support temperature
+        if self.temperature is not None and not self._is_reasoning_model():
             params["temperature"] = self.temperature
         
         if structured_output:
@@ -224,7 +249,8 @@ class ChatAzureOpenAI(BaseChatLLM):
         if openai_tools:
             params["tools"] = openai_tools
         
-        if self.temperature is not None:
+        # Reasoning models don't support temperature
+        if self.temperature is not None and not self._is_reasoning_model():
             params["temperature"] = self.temperature
         
         if structured_output:
@@ -262,13 +288,14 @@ class ChatAzureOpenAI(BaseChatLLM):
             "model": self._deployment,
             "messages": openai_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             **self.kwargs
         }
         
         if openai_tools:
             params["tools"] = openai_tools
         
-        if self.temperature is not None:
+        if self.temperature is not None and not self._is_reasoning_model():
             params["temperature"] = self.temperature
         
         if json_mode:
@@ -276,14 +303,60 @@ class ChatAzureOpenAI(BaseChatLLM):
         
         response = self.client.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         for chunk in response:
             if not chunk.choices:
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    reasoning_tokens = None
+                    if hasattr(chunk.usage, "completion_tokens_details") and chunk.usage.completion_tokens_details:
+                        reasoning_tokens = getattr(
+                            chunk.usage.completion_tokens_details, "reasoning_tokens", None
+                        )
+                    final_usage = ChatLLMUsage(
+                        prompt_tokens=chunk.usage.prompt_tokens,
+                        completion_tokens=chunk.usage.completion_tokens,
+                        total_tokens=chunk.usage.total_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                    )
                 continue
             
             delta = chunk.choices[0].delta
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            # Handle reasoning content for o-series models
+            if self._is_reasoning_model() and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                yield ChatLLMResponse(thinking=delta.reasoning_content)
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -297,13 +370,14 @@ class ChatAzureOpenAI(BaseChatLLM):
             "model": self._deployment,
             "messages": openai_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             **self.kwargs
         }
         
         if openai_tools:
             params["tools"] = openai_tools
         
-        if self.temperature is not None:
+        if self.temperature is not None and not self._is_reasoning_model():
             params["temperature"] = self.temperature
         
         if json_mode:
@@ -311,14 +385,59 @@ class ChatAzureOpenAI(BaseChatLLM):
         
         response = await self.aclient.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         async for chunk in response:
             if not chunk.choices:
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    reasoning_tokens = None
+                    if hasattr(chunk.usage, "completion_tokens_details") and chunk.usage.completion_tokens_details:
+                        reasoning_tokens = getattr(
+                            chunk.usage.completion_tokens_details, "reasoning_tokens", None
+                        )
+                    final_usage = ChatLLMUsage(
+                        prompt_tokens=chunk.usage.prompt_tokens,
+                        completion_tokens=chunk.usage.completion_tokens,
+                        total_tokens=chunk.usage.total_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                    )
                 continue
             
             delta = chunk.choices[0].delta
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            if self._is_reasoning_model() and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                yield ChatLLMResponse(thinking=delta.reasoning_content)
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         return Metadata(

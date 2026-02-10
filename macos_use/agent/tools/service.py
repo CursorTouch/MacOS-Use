@@ -280,6 +280,23 @@ def wait_tool(duration:int,**kwargs)->str:
     sleep(duration)
     return f'Waited for {duration} seconds.'
 
+@Tool('desktop_tool', model=Desktop)
+def desktop_tool(action: Literal['create', 'remove', 'rename', 'switch'], desktop_name: Optional[str] = None, new_name: Optional[str] = None, **kwargs) -> str:
+    '''
+    Manages macOS virtual desktops (Spaces) for workspace organization via Mission Control.
+
+    - create: Creates a new Space by opening Mission Control and adding a desktop.
+    - remove: Removes the current Space. Switch to the target Space first using switch, then remove it.
+    - switch: Switches to a Space by number (e.g., desktop_name="2") or direction (desktop_name="left"/"right"/"next"/"previous").
+      Switching by number requires the shortcut to be enabled in System Settings > Keyboard > Shortcuts > Mission Control.
+    - rename: Not supported on macOS. Spaces are identified by number, not name.
+    '''
+    desktop: _Desktop = kwargs['desktop']
+    try:
+        return desktop.manage_spaces(action, desktop_name, new_name)
+    except Exception as e:
+        return f"Error executing desktop action '{action}': {str(e)}"
+
 @Tool('scrape_tool',model=Scrape)
 def scrape_tool(url:str,**kwargs)->str:
     '''

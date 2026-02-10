@@ -1,5 +1,6 @@
 import os
 import json
+import uuid
 import logging
 from typing import Iterator, AsyncIterator, List, Optional, Any, overload
 import ollama
@@ -122,7 +123,7 @@ class ChatOllama(BaseChatLLM):
             tool_call = tool_calls[0]
             func = tool_call.get("function", {})
             content = ToolMessage(
-                id=func.get("name"), # Ollama calls usually don't have unique IDs in this SDK
+                id=f"call_{uuid.uuid4().hex[:8]}",
                 name=func.get("name"),
                 params=func.get("arguments", {})
             )
@@ -255,6 +256,19 @@ class ChatOllama(BaseChatLLM):
             message = chunk.get("message", {})
             if "content" in message and message["content"]:
                 yield ChatLLMResponse(content=AIMessage(content=message["content"]))
+            
+            # Handle tool calls in stream
+            tool_calls = message.get("tool_calls", [])
+            if tool_calls:
+                tc = tool_calls[0]
+                func = tc.get("function", {})
+                yield ChatLLMResponse(
+                    content=ToolMessage(
+                        id=f"call_{uuid.uuid4().hex[:8]}",
+                        name=func.get("name"),
+                        params=func.get("arguments", {})
+                    )
+                )
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -288,6 +302,19 @@ class ChatOllama(BaseChatLLM):
             message = chunk.get("message", {})
             if "content" in message and message["content"]:
                 yield ChatLLMResponse(content=AIMessage(content=message["content"]))
+            
+            # Handle tool calls in stream
+            tool_calls = message.get("tool_calls", [])
+            if tool_calls:
+                tc = tool_calls[0]
+                func = tc.get("function", {})
+                yield ChatLLMResponse(
+                    content=ToolMessage(
+                        id=f"call_{uuid.uuid4().hex[:8]}",
+                        name=func.get("name"),
+                        params=func.get("arguments", {})
+                    )
+                )
 
     def get_metadata(self) -> Metadata:
         return Metadata(

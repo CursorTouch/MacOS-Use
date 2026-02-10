@@ -382,6 +382,8 @@ class ChatGoogle(BaseChatLLM):
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
 
+        final_usage = None
+
         for chunk in self.client.models.generate_content_stream(
             model=self._model,
             contents=contents,
@@ -393,6 +395,20 @@ class ChatGoogle(BaseChatLLM):
                     for part in chunk.candidates[0].content.parts:
                         if getattr(part, "thought", False) and part.text:
                             yield ChatLLMResponse(thinking=part.text)
+                        # Detect function calls in stream
+                        fc = getattr(part, "function_call", None)
+                        if fc:
+                            fc_id = getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                            tool_params = dict(fc.args) if fc.args else {}
+                            thinking = self._extract_thinking(chunk)
+                            content = ToolMessage(id=fc_id, name=fc.name, params=tool_params)
+                            if thinking:
+                                content.thinking = thinking
+                            yield ChatLLMResponse(
+                                content=content,
+                                thinking=thinking,
+                                usage=self._extract_usage(chunk.usage_metadata) if chunk.usage_metadata else None,
+                            )
             except (AttributeError, IndexError):
                 pass
 
@@ -403,9 +419,12 @@ class ChatGoogle(BaseChatLLM):
             except (AttributeError, ValueError):
                 pass
 
-            # Yield usage on final chunk
+            # Track usage on final chunk
             if chunk.usage_metadata and chunk.usage_metadata.total_token_count:
-                yield ChatLLMResponse(usage=self._extract_usage(chunk.usage_metadata))
+                final_usage = self._extract_usage(chunk.usage_metadata)
+
+        if final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(
@@ -427,17 +446,33 @@ class ChatGoogle(BaseChatLLM):
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
 
+        final_usage = None
+
         async for chunk in await self.client.aio.models.generate_content_stream(
             model=self._model,
             contents=contents,
             config=config,
         ):
-            # Yield thinking parts
+            # Yield thinking parts and detect function calls
             try:
                 if chunk.candidates and chunk.candidates[0].content:
                     for part in chunk.candidates[0].content.parts:
                         if getattr(part, "thought", False) and part.text:
                             yield ChatLLMResponse(thinking=part.text)
+                        # Detect function calls in stream
+                        fc = getattr(part, "function_call", None)
+                        if fc:
+                            fc_id = getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                            tool_params = dict(fc.args) if fc.args else {}
+                            thinking = self._extract_thinking(chunk)
+                            content = ToolMessage(id=fc_id, name=fc.name, params=tool_params)
+                            if thinking:
+                                content.thinking = thinking
+                            yield ChatLLMResponse(
+                                content=content,
+                                thinking=thinking,
+                                usage=self._extract_usage(chunk.usage_metadata) if chunk.usage_metadata else None,
+                            )
             except (AttributeError, IndexError):
                 pass
 
@@ -448,9 +483,12 @@ class ChatGoogle(BaseChatLLM):
             except (AttributeError, ValueError):
                 pass
 
-            # Yield usage on final chunk
+            # Track usage on final chunk
             if chunk.usage_metadata and chunk.usage_metadata.total_token_count:
-                yield ChatLLMResponse(usage=self._extract_usage(chunk.usage_metadata))
+                final_usage = self._extract_usage(chunk.usage_metadata)
+
+        if final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         context_window = 1048576  # Default for Gemini 2.x models (1M tokens)

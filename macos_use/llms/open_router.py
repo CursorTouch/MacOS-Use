@@ -284,6 +284,7 @@ class ChatOpenRouter(BaseChatLLM):
             "model": self._model,
             "messages": openai_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             **self.kwargs
         }
         
@@ -298,14 +299,50 @@ class ChatOpenRouter(BaseChatLLM):
         
         response = self.client.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         for chunk in response:
             if not chunk.choices:
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    final_usage = ChatLLMUsage(
+                        prompt_tokens=getattr(chunk.usage, 'prompt_tokens', 0),
+                        completion_tokens=getattr(chunk.usage, 'completion_tokens', 0),
+                        total_tokens=getattr(chunk.usage, 'total_tokens', 0),
+                    )
                 continue
             
             delta = chunk.choices[0].delta
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -319,6 +356,7 @@ class ChatOpenRouter(BaseChatLLM):
             "model": self._model,
             "messages": openai_messages,
             "stream": True,
+            "stream_options": {"include_usage": True},
             **self.kwargs
         }
         
@@ -333,14 +371,50 @@ class ChatOpenRouter(BaseChatLLM):
         
         response = await self.aclient.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         async for chunk in response:
             if not chunk.choices:
+                if hasattr(chunk, 'usage') and chunk.usage:
+                    final_usage = ChatLLMUsage(
+                        prompt_tokens=getattr(chunk.usage, 'prompt_tokens', 0),
+                        completion_tokens=getattr(chunk.usage, 'completion_tokens', 0),
+                        total_tokens=getattr(chunk.usage, 'total_tokens', 0),
+                    )
                 continue
             
             delta = chunk.choices[0].delta
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         return Metadata(

@@ -74,8 +74,8 @@ class ChatOpenAI(BaseChatLLM):
         return "openai"
     
     def _is_reasoning_model(self) -> bool:
-        """Check if the model is a reasoning model (o1 series)."""
-        return self._model.startswith("o1")
+        """Check if the model is a reasoning model (o-series: o1, o3, o4, etc.)."""
+        return self._model.startswith(("o1", "o3", "o4"))
 
     def _convert_messages(self, messages: List[BaseMessage]) -> List[dict]:
         """
@@ -338,6 +338,12 @@ class ChatOpenAI(BaseChatLLM):
 
         response = self.client.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         for chunk in response:
             if not chunk.choices:
                 # Final chunk with usage
@@ -348,14 +354,12 @@ class ChatOpenAI(BaseChatLLM):
                             chunk.usage.completion_tokens_details, "reasoning_tokens", None
                         )
 
-                    usage = ChatLLMUsage(
+                    final_usage = ChatLLMUsage(
                         prompt_tokens=chunk.usage.prompt_tokens,
                         completion_tokens=chunk.usage.completion_tokens,
                         total_tokens=chunk.usage.total_tokens,
                         reasoning_tokens=reasoning_tokens,
                     )
-
-                    yield ChatLLMResponse(usage=usage)
                 continue
             
             delta = chunk.choices[0].delta
@@ -363,9 +367,33 @@ class ChatOpenAI(BaseChatLLM):
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
             
-            # Handle reasoning content for o1 models
+            # Handle reasoning content for o-series models
             if self._is_reasoning_model() and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                 yield ChatLLMResponse(thinking=delta.reasoning_content)
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -394,6 +422,12 @@ class ChatOpenAI(BaseChatLLM):
 
         response = await self.aclient.chat.completions.create(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         async for chunk in response:
             if not chunk.choices:
                 if chunk.usage:
@@ -403,14 +437,12 @@ class ChatOpenAI(BaseChatLLM):
                             chunk.usage.completion_tokens_details, "reasoning_tokens", None
                         )
 
-                    usage = ChatLLMUsage(
+                    final_usage = ChatLLMUsage(
                         prompt_tokens=chunk.usage.prompt_tokens,
                         completion_tokens=chunk.usage.completion_tokens,
                         total_tokens=chunk.usage.total_tokens,
                         reasoning_tokens=reasoning_tokens,
                     )
-
-                    yield ChatLLMResponse(usage=usage)
                 continue
             
             delta = chunk.choices[0].delta
@@ -420,6 +452,30 @@ class ChatOpenAI(BaseChatLLM):
             
             if self._is_reasoning_model() and hasattr(delta, 'reasoning_content') and delta.reasoning_content:
                 yield ChatLLMResponse(thinking=delta.reasoning_content)
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         # Determine context window based on model

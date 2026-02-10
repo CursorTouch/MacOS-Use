@@ -916,6 +916,134 @@ class Desktop:
             x, y, text = loc[0], loc[1], loc[2]
             self.type(loc=(x, y), text=text, clear=True)
 
+    def manage_spaces(
+        self,
+        action: str,
+        desktop_name: str = None,
+        new_name: str = None,
+    ) -> str:
+        """
+        Manage macOS virtual desktops (Spaces) via Mission Control.
+
+        Args:
+            action: 'create', 'remove', 'rename', or 'switch'.
+            desktop_name: Target space number or direction for switch,
+                          ignored for create/rename.
+            new_name: Not used (macOS does not support renaming Spaces).
+
+        Returns:
+            Status message.
+        """
+        match action:
+            case 'create':
+                # Open Mission Control via Control+Up, click the add button, then close
+                create_script = '\n'.join([
+                    'tell application "System Events"',
+                    '    key code 126 using {control down}',
+                    '    delay 1.0',
+                    'end tell',
+                    '',
+                    'tell application "System Events" to tell process "Dock"',
+                    '    click button 1 of group 2 of group 1 of group 1',
+                    'end tell',
+                    '',
+                    'delay 0.5',
+                    '',
+                    'tell application "System Events"',
+                    '    key code 53',
+                    'end tell',
+                ])
+                response, status = self.execute_command(create_script, mode='osascript', timeout=15)
+                if status == 0:
+                    return "Created a new Space via Mission Control."
+                return f"Error creating Space: {response}"
+
+            case 'remove':
+                if not desktop_name:
+                    # Remove the currently active Space
+                    remove_script = '\n'.join([
+                        'tell application "System Events"',
+                        '    key code 126 using {control down}',
+                        '    delay 1.0',
+                        'end tell',
+                        '',
+                        'tell application "System Events" to tell process "Dock"',
+                        '    set mcGroup to group 1 of group 1',
+                        '    set spacesBar to list 1 of group 2 of mcGroup',
+                        '    set allSpaces to buttons of spacesBar',
+                        '    if (count of allSpaces) is less than or equal to 1 then',
+                        '        error "Cannot remove the last remaining Space."',
+                        '    end if',
+                        '    repeat with sp in allSpaces',
+                        '        if value of attribute "AXIsSelected" of sp is true then',
+                        '            perform action "AXRemoveDesktop" of sp',
+                        '            exit repeat',
+                        '        end if',
+                        '    end repeat',
+                        'end tell',
+                        '',
+                        'delay 0.5',
+                        '',
+                        'tell application "System Events"',
+                        '    key code 53',
+                        'end tell',
+                    ])
+                    response, status = self.execute_command(remove_script, mode='osascript', timeout=15)
+                    if status == 0:
+                        return "Removed the current Space."
+                    return f"Error removing Space: {response}"
+                else:
+                    return ("Error: To remove a specific Space, first switch to it "
+                            "using the 'switch' action, then call remove without desktop_name.")
+
+            case 'rename':
+                return "Error: Renaming Spaces is not supported on macOS. Spaces are identified by their number."
+
+            case 'switch':
+                if not desktop_name:
+                    return ("Error: desktop_name is required for switching. "
+                            "Use a number (e.g., '1', '2') or direction ('left', 'right', 'next', 'previous').")
+
+                name = desktop_name.strip().lower()
+
+                if name in ('left', 'previous'):
+                    script = 'tell application "System Events" to key code 123 using {control down}'
+                    response, status = self.execute_command(script, mode='osascript')
+                    if status == 0:
+                        return "Switched to the Space on the left."
+                    return f"Error switching Space: {response}"
+
+                elif name in ('right', 'next'):
+                    script = 'tell application "System Events" to key code 124 using {control down}'
+                    response, status = self.execute_command(script, mode='osascript')
+                    if status == 0:
+                        return "Switched to the Space on the right."
+                    return f"Error switching Space: {response}"
+
+                elif name.isdigit():
+                    space_num = int(name)
+                    if space_num < 1 or space_num > 9:
+                        return f"Error: Space number must be between 1 and 9. Got: {space_num}"
+                    # macOS key codes for number keys 1-9
+                    key_codes = {1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25}
+                    key_code = key_codes[space_num]
+                    script = f'tell application "System Events" to key code {key_code} using {{control down}}'
+                    response, status = self.execute_command(script, mode='osascript')
+                    if status == 0:
+                        return f"Switched to Space {space_num}."
+                    return (
+                        f"Error switching to Space {space_num}: {response}. "
+                        f"Ensure 'Switch to Desktop {space_num}' is enabled in "
+                        f"System Settings > Keyboard > Shortcuts > Mission Control."
+                    )
+
+                else:
+                    return (f"Error: Invalid desktop_name '{desktop_name}'. "
+                            "Use a number (1-9) or direction ('left', 'right', 'next', 'previous').")
+
+            case _:
+                return f"Error: Unknown action: {action}"
+
     def scrape(self, url: str) -> str:
         """
         Fetch content from a URL and convert to markdown.

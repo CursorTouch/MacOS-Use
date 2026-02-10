@@ -179,7 +179,7 @@ class ChatCerebras(BaseChatLLM):
         if self.temperature is not None:
             params["temperature"] = self.temperature
         
-        if json_mode:
+        if structured_output or json_mode:
             params["response_format"] = {"type": "json_object"}
             
         response = self.client.chat.completions.create(**params)
@@ -221,7 +221,7 @@ class ChatCerebras(BaseChatLLM):
         if self.temperature is not None:
             params["temperature"] = self.temperature
         
-        if json_mode:
+        if structured_output or json_mode:
             params["response_format"] = {"type": "json_object"}
             
         response = await self.aclient.chat.completions.create(**params)
@@ -263,10 +263,15 @@ class ChatCerebras(BaseChatLLM):
         if self.temperature is not None:
             params["temperature"] = self.temperature
         
-        if json_mode:
+        if structured_output or json_mode:
             params["response_format"] = {"type": "json_object"}
         
         response = self.client.chat.completions.create(**params)
+        
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
         
         for chunk in response:
             if not chunk.choices:
@@ -276,6 +281,27 @@ class ChatCerebras(BaseChatLLM):
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params)
+            )
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -298,10 +324,15 @@ class ChatCerebras(BaseChatLLM):
         if self.temperature is not None:
             params["temperature"] = self.temperature
         
-        if json_mode:
+        if structured_output or json_mode:
             params["response_format"] = {"type": "json_object"}
         
         response = await self.aclient.chat.completions.create(**params)
+        
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
         
         async for chunk in response:
             if not chunk.choices:
@@ -311,6 +342,27 @@ class ChatCerebras(BaseChatLLM):
             
             if delta.content:
                 yield ChatLLMResponse(content=AIMessage(content=delta.content))
+            
+            # Accumulate tool call deltas
+            if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params)
+            )
 
     def get_metadata(self) -> Metadata:
         return Metadata(

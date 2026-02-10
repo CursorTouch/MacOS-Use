@@ -120,30 +120,33 @@ class ChatAnthropic(BaseChatLLM):
                     content.append({"type": "text", "text": msg.content})
                 anthropic_messages.append({"role": "assistant", "content": content if content else ""})
             elif isinstance(msg, ToolMessage):
+                # Build content blocks for the assistant turn
+                content_blocks = []
+                if msg.thinking:
+                    content_blocks.append({
+                        "type": "thinking",
+                        "thinking": msg.thinking,
+                        "signature": msg.thinking_signature
+                    })
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": msg.id,
+                    "name": msg.name,
+                    "input": msg.params
+                })
+                
                 # Anthropic requires a tool_use block followed by a tool_result block
                 if anthropic_messages and anthropic_messages[-1]["role"] == "assistant":
                     last_content = anthropic_messages[-1]["content"]
                     if isinstance(last_content, str):
-                        last_content = [{"type": "text", "text": last_content}]
-                    
-                    tool_use_block = {
-                        "type": "tool_use",
-                        "id": msg.id,
-                        "name": msg.name,
-                        "input": msg.params
-                    }
+                        last_content = [{"type": "text", "text": last_content}] if last_content else []
                     if isinstance(last_content, list):
-                        last_content.append(tool_use_block)
+                        last_content.extend(content_blocks)
                     anthropic_messages[-1]["content"] = last_content
                 else:
                     anthropic_messages.append({
                         "role": "assistant",
-                        "content": [{
-                            "type": "tool_use",
-                            "id": msg.id,
-                            "name": msg.name,
-                            "input": msg.params
-                        }]
+                        "content": content_blocks
                     })
                 
                 # Add the tool result
@@ -241,6 +244,7 @@ class ChatAnthropic(BaseChatLLM):
         
         text_content = ""
         thinking = None
+        thinking_signature = None
         tool_message = None
         
         for block in content_blocks:
@@ -248,6 +252,7 @@ class ChatAnthropic(BaseChatLLM):
                 text_content += block.text
             elif block.type == "thinking":
                 thinking = block.thinking
+                thinking_signature = getattr(block, 'signature', None)
             elif block.type == "tool_use":
                 # Take the first tool use as per Agent logic
                 if not tool_message:
@@ -260,10 +265,12 @@ class ChatAnthropic(BaseChatLLM):
         final_content = tool_message if tool_message else AIMessage(content=text_content)
         if thinking:
             final_content.thinking = thinking
+            final_content.thinking_signature = thinking_signature
         
         return ChatLLMResponse(
             content=final_content,
             thinking=thinking,
+            thinking_signature=thinking_signature,
             usage=usage
         )
 
@@ -418,12 +425,17 @@ class ChatAnthropic(BaseChatLLM):
         
         with self.client.messages.stream(**params) as stream:
             for event in stream:
-                if event.type == "text":
+                if event.type == "thinking":
+                    yield ChatLLMResponse(
+                        content=AIMessage(content=""),
+                        thinking=event.thinking
+                    )
+                elif event.type == "text":
                     yield ChatLLMResponse(content=AIMessage(content=event.text))
-                elif event.type == "input_json":
-                    # Support partial tool call yield? 
-                    # For now, we skip streaming for tool calls in Agent logic
-                    pass
+            
+            # Yield the final aggregated response with tool calls, thinking_signature, and usage
+            final_message = stream.get_final_message()
+            yield self._process_response(final_message)
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -451,8 +463,17 @@ class ChatAnthropic(BaseChatLLM):
         
         async with self.aclient.messages.stream(**params) as stream:
             async for event in stream:
-                if event.type == "text":
+                if event.type == "thinking":
+                    yield ChatLLMResponse(
+                        content=AIMessage(content=""),
+                        thinking=event.thinking
+                    )
+                elif event.type == "text":
                     yield ChatLLMResponse(content=AIMessage(content=event.text))
+            
+            # Yield the final aggregated response with tool calls, thinking_signature, and usage
+            final_message = await stream.get_final_message()
+            yield self._process_response(final_message)
 
     def get_metadata(self) -> Metadata:
         return Metadata(

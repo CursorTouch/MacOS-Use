@@ -1,4 +1,4 @@
-# macOS Use Agent
+# macOS Use
 
 An intelligent agent for macOS that uses LLMs to control your computer. Built on top of `macos-mcp`, it provides a powerful interface for automating tasks on your Mac.
 

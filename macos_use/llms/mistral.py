@@ -167,7 +167,13 @@ class ChatMistral(BaseChatLLM):
         )
         
         content = None
+        thinking = None
+        
         if hasattr(message, 'tool_calls') and message.tool_calls:
+            # Extract thinking from content if present (Magistral thinking models)
+            if message.content:
+                _, thinking = self._extract_content(message.content)
+            
             tool_call = message.tool_calls[0]
             try:
                 # Mistral may return arguments as string or dict
@@ -186,12 +192,15 @@ class ChatMistral(BaseChatLLM):
                 name=tool_call.function.name,
                 params=params
             )
+            if thinking:
+                content.thinking = thinking
         else:
             text, thinking = self._extract_content(message.content)
             content = AIMessage(content=text or "", thinking=thinking)
             
         return ChatLLMResponse(
             content=content,
+            thinking=thinking,
             usage=usage
         )
 
@@ -315,6 +324,12 @@ class ChatMistral(BaseChatLLM):
         
         response = self.client.chat.stream(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         for chunk in response:
             if hasattr(chunk, 'data') and hasattr(chunk.data, 'choices') and chunk.data.choices:
                 delta = chunk.data.choices[0].delta
@@ -324,6 +339,42 @@ class ChatMistral(BaseChatLLM):
                         yield ChatLLMResponse(
                             content=AIMessage(content=text, thinking=thinking)
                         )
+                
+                # Accumulate tool call deltas
+                if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                    tc_delta = delta.tool_calls[0]
+                    if hasattr(tc_delta, 'id') and tc_delta.id:
+                        tool_call_id = tc_delta.id
+                    if hasattr(tc_delta, 'function') and tc_delta.function:
+                        if tc_delta.function.name:
+                            tool_call_name = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tool_call_args += tc_delta.function.arguments
+            
+            # Track usage
+            if hasattr(chunk, 'data') and hasattr(chunk.data, 'usage') and chunk.data.usage:
+                usage_data = chunk.data.usage
+                final_usage = ChatLLMUsage(
+                    prompt_tokens=usage_data.prompt_tokens,
+                    completion_tokens=usage_data.completion_tokens,
+                    total_tokens=usage_data.total_tokens,
+                )
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                if tool_call_args:
+                    tool_params = json.loads(tool_call_args) if isinstance(tool_call_args, str) else tool_call_args
+                else:
+                    tool_params = {}
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(self, messages: list[BaseMessage], tools: list[Tool] = [], structured_output: BaseModel | None = None, json_mode: bool = False) -> AsyncIterator[ChatLLMResponse]:
@@ -350,6 +401,12 @@ class ChatMistral(BaseChatLLM):
         
         response = await self.client.chat.stream_async(**params)
         
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+        
         async for chunk in response:
             if hasattr(chunk, 'data') and hasattr(chunk.data, 'choices') and chunk.data.choices:
                 delta = chunk.data.choices[0].delta
@@ -359,6 +416,42 @@ class ChatMistral(BaseChatLLM):
                         yield ChatLLMResponse(
                             content=AIMessage(content=text, thinking=thinking)
                         )
+                
+                # Accumulate tool call deltas
+                if hasattr(delta, 'tool_calls') and delta.tool_calls:
+                    tc_delta = delta.tool_calls[0]
+                    if hasattr(tc_delta, 'id') and tc_delta.id:
+                        tool_call_id = tc_delta.id
+                    if hasattr(tc_delta, 'function') and tc_delta.function:
+                        if tc_delta.function.name:
+                            tool_call_name = tc_delta.function.name
+                        if tc_delta.function.arguments:
+                            tool_call_args += tc_delta.function.arguments
+            
+            # Track usage
+            if hasattr(chunk, 'data') and hasattr(chunk.data, 'usage') and chunk.data.usage:
+                usage_data = chunk.data.usage
+                final_usage = ChatLLMUsage(
+                    prompt_tokens=usage_data.prompt_tokens,
+                    completion_tokens=usage_data.completion_tokens,
+                    total_tokens=usage_data.total_tokens,
+                )
+        
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                if tool_call_args:
+                    tool_params = json.loads(tool_call_args) if isinstance(tool_call_args, str) else tool_call_args
+                else:
+                    tool_params = {}
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         # Context windows vary by model

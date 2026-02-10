@@ -21,7 +21,7 @@ class SystemMessage(BaseMessage):
         return f"SystemMessage(content={shorten(self.content, width=80,placeholder='...')})"
 
 class HumanMessage(BaseMessage):
-    role: Literal["user"] = "human"
+    role: Literal["human"] = "human"
     content: str
 
     def __repr__(self) -> str:

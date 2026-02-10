@@ -342,11 +342,17 @@ class ChatLiteLLM(BaseChatLLM):
 
         response = litellm.completion(**params)
 
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+
         for chunk in response:
             if not chunk.choices:
                 # Final chunk may contain usage
                 if hasattr(chunk, "usage") and chunk.usage:
-                    yield ChatLLMResponse(usage=self._extract_usage(chunk.usage))
+                    final_usage = self._extract_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -357,6 +363,30 @@ class ChatLiteLLM(BaseChatLLM):
             # Handle reasoning/thinking content in stream
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
                 yield ChatLLMResponse(thinking=delta.reasoning_content)
+
+            # Accumulate tool call deltas
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     @overload
     async def astream(
@@ -382,10 +412,16 @@ class ChatLiteLLM(BaseChatLLM):
 
         response = await litellm.acompletion(**params)
 
+        # Accumulators for streamed tool calls
+        tool_call_id = None
+        tool_call_name = None
+        tool_call_args = ""
+        final_usage = None
+
         async for chunk in response:
             if not chunk.choices:
                 if hasattr(chunk, "usage") and chunk.usage:
-                    yield ChatLLMResponse(usage=self._extract_usage(chunk.usage))
+                    final_usage = self._extract_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -395,6 +431,30 @@ class ChatLiteLLM(BaseChatLLM):
 
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
                 yield ChatLLMResponse(thinking=delta.reasoning_content)
+
+            # Accumulate tool call deltas
+            if hasattr(delta, "tool_calls") and delta.tool_calls:
+                tc_delta = delta.tool_calls[0]
+                if tc_delta.id:
+                    tool_call_id = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        tool_call_name = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        tool_call_args += tc_delta.function.arguments
+
+        # Yield accumulated tool call as final response
+        if tool_call_id and tool_call_name:
+            try:
+                tool_params = json.loads(tool_call_args)
+            except json.JSONDecodeError:
+                tool_params = {}
+            yield ChatLLMResponse(
+                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
+                usage=final_usage
+            )
+        elif final_usage:
+            yield ChatLLMResponse(usage=final_usage)
 
     def get_metadata(self) -> Metadata:
         # Try to get model info from LiteLLM's model registry
