@@ -798,16 +798,20 @@ class Desktop:
         
         if clear:
             pg.hotkey('command', 'a')
+            time.sleep(0.05)
             pg.press('delete')
         
         if caret_position == 'start':
             pg.hotkey('command', 'left')
+            time.sleep(0.05)
         elif caret_position == 'end':
             pg.hotkey('command', 'right')
+            time.sleep(0.05)
         
         pg.typewrite(text,interval=0.05)
         
         if press_enter:
+            time.sleep(0.05)
             pg.press('enter')
 
     def scroll(
