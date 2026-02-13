@@ -2,25 +2,10 @@
 Tree service for macOS accessibility tree traversal.
 Provides methods to capture and traverse the accessibility tree using the macOS Accessibility API.
 Uses multi-threading for parallel traversal of different UI regions.
+
+Now uses the centralized ax module for all accessibility operations.
 """
-from ApplicationServices import (
-    AXUIElementCopyAttributeValue,
-    AXUIElementGetAttributeValueCount,
-    AXUIElementCreateApplication,
-    kAXErrorSuccess,
-    kAXChildrenAttribute,
-    kAXRoleAttribute,
-    kAXSubroleAttribute,
-    kAXTitleAttribute,
-    kAXDescriptionAttribute,
-    kAXPositionAttribute,
-    kAXSizeAttribute,
-    kAXFocusedWindowAttribute,
-    kAXMainWindowAttribute,
-    kAXWindowsAttribute,
-    kAXMenuBarAttribute,
-)
-from Cocoa import NSWorkspace
+import macos_use.ax as ax
 from macos_use.agent.tree.views import (
     TreeState,
     TreeElementNode,
@@ -28,19 +13,11 @@ from macos_use.agent.tree.views import (
     BoundingBox,
     Center,
 )
-from macos_use.agent.tree.config import (
-    INTERACTIVE_ROLES,
-    NON_INTERACTIVE_ROLES,
-    INTERACTIVE_ACTIONS,
-    WINDOW_CONTROL_SUBROLES,
-    SCROLLABLE_ROLES,
-)
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, TYPE_CHECKING
 from threading import Lock
 import weakref
 import logging
-import re
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -60,93 +37,11 @@ class Tree:
         self.desktop = weakref.proxy(desktop)
         self._lock = Lock()
 
-    def get_attr(self, element, attr: str):
-        """Get an attribute value from an accessibility element."""
-        try:
-            error, value = AXUIElementCopyAttributeValue(element, attr, None)
-            if error == kAXErrorSuccess:
-                return value
-        except Exception:
-            pass
-        return None
-
-    def get_children(self, element) -> list:
-        """Get child elements of an accessibility element."""
-        try:
-            error, count = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute, None)
-            if error != kAXErrorSuccess or count == 0:
-                return []
-            
-            error, children = AXUIElementCopyAttributeValue(element, kAXChildrenAttribute, None)
-            if error == kAXErrorSuccess and children:
-                return list(children)
-        except Exception:
-            pass
-        return []
-
-    def get_position(self, element) -> Optional[tuple[float, float]]:
-        """Get the position (x, y) of an accessibility element."""
-        error, pos_val = AXUIElementCopyAttributeValue(element, kAXPositionAttribute, None)
-        if error != 0 or pos_val is None:
-            return None
-            
-        # Try standard attribute access (for bridged CGPoint/NSPoint)
-        if hasattr(pos_val, 'x') and hasattr(pos_val, 'y'):
-            return (pos_val.x, pos_val.y)
-        
-        # Try AXValue string parsing
-        if hasattr(pos_val, 'getValue_size_type_') or str(pos_val).startswith('<AXValue'):
-            desc = str(pos_val)
-            try:
-                match = re.search(r'x[:=]\s*([-\d\.]+).*?y[:=]\s*([-\d\.]+)', desc, re.IGNORECASE)
-                if match:
-                    return (float(match.group(1)), float(match.group(2)))
-            except Exception:
-                pass
-            
-        # Try generic sequence access
-        try:
-            if len(pos_val) == 2:
-                return (pos_val[0], pos_val[1])
-        except Exception:
-            pass
-            
-        return None
-
-    def get_size(self, element) -> Optional[tuple[float, float]]:
-        """Get the size (width, height) of an accessibility element."""
-        error, size_val = AXUIElementCopyAttributeValue(element, kAXSizeAttribute, None)
-        if error != 0 or size_val is None:
-            return None
-            
-        # Try standard attribute access (for bridged CGSize/NSSize)
-        if hasattr(size_val, 'width') and hasattr(size_val, 'height'):
-            return (size_val.width, size_val.height)
-            
-        # Try generic sequence access
-        try:
-            if len(size_val) == 2:
-                return (size_val[0], size_val[1])
-        except Exception:
-            pass
-            
-        # Try AXValue string parsing
-        if hasattr(size_val, 'getValue_size_type_') or str(size_val).startswith('<AXValue'):
-            desc = str(size_val)
-            try:
-                match = re.search(r'w(idth)?[:=]\s*([-\d\.]+).*?h(eight)?[:=]\s*([-\d\.]+)', desc, re.IGNORECASE)
-                if match:
-                    return (float(match.group(2)), float(match.group(4)))
-            except Exception:
-                pass
-
-        return None
-
     def has_interactive_actions(self, actions) -> bool:
         """Check if element has interactive actions."""
         if not actions:
             return False
-        return any(action in INTERACTIVE_ACTIONS for action in actions)
+        return any(action in ax.INTERACTIVE_ACTIONS for action in actions)
 
     def _check_launchpad_and_get_dock(self, apps) -> tuple:
         """
@@ -160,15 +55,15 @@ class Tree:
             return None, None
             
         pid = dock_app.processIdentifier()
-        ax_dock = AXUIElementCreateApplication(pid)
-        children = self.get_children(ax_dock)
+        ax_dock = ax.ControlFromPID(pid)
+        children = ax.GetChildren(ax_dock)
         
         for child in children:
-            role = self.get_attr(child, kAXRoleAttribute)
-            title = self.get_attr(child, kAXTitleAttribute)
-            if role == 'AXGroup' and title == 'Launchpad':
+            role = ax.GetAttribute(child, ax.Attribute.Role)
+            title = ax.GetAttribute(child, ax.Attribute.Title)
+            if role == ax.Role.Group and title == 'Launchpad':
                 # Found the Launchpad group. Check if it's visible.
-                is_hidden = self.get_attr(child, 'AXHidden')
+                is_hidden = ax.GetAttribute(child, ax.Attribute.Hidden)
                 if is_hidden is not True:
                     return child, ax_dock
                     
@@ -183,14 +78,12 @@ class Tree:
             return False
         
         try:
-            # Check AXFullScreen attribute
-            fullscreen = self.get_attr(window, 'AXFullScreen')
+            fullscreen = ax.GetAttribute(window, ax.Attribute.FullScreen)
             if fullscreen is True:
                 return True
             
-            # Alternative: Check subrole for fullscreen
-            subrole = self.get_attr(window, kAXSubroleAttribute)
-            if subrole == 'AXFullScreenWindow':
+            subrole = ax.GetAttribute(window, ax.Attribute.Subrole)
+            if subrole == ax.Subrole.FullScreenWindow:
                 return True
         except Exception:
             pass
@@ -214,73 +107,62 @@ class Tree:
         scrollable_elements: list[ScrollElementNode] = []
 
         # Get all running apps
-        apps = NSWorkspace.sharedWorkspace().runningApplications()
+        apps = ax.GetRunningApplications()
 
         # Check if Launchpad is open and get launchpad/dock elements
-        # This avoids redundant checks and race conditions
         launchpad_element, ax_dock = self._check_launchpad_and_get_dock(apps)
 
         # Prepare tasks for parallel execution
         tasks = []
 
         if launchpad_element:
-            # Launchpad is open - only scan Launchpad content and Dock
             logger.info("Launchpad is active - scanning only Launchpad and Dock")
             
             tasks.append(('launchpad', launchpad_element, 'Launchpad', None))
             
-            # Also scan the Dock itself
             if ax_dock:
                 tasks.append(('dock', ax_dock, 'Dock', None))
         else:
             # Normal mode - scan all sources
-            
-            # Resolve the frontmost application PID and name.
-            # Prefer the active_pid supplied by Desktop (from CGWindowListCopyWindowInfo)
-            # because NSWorkspace.frontmostApplication() can return stale data when
-            # the Python process doesn't run an NSRunLoop.
             pid = None
             app_name = window_name or ''
 
             if active_pid:
                 pid = active_pid
-                # Resolve the human-readable app name from the PID
                 for app in apps:
                     if app.processIdentifier() == active_pid:
                         app_name = app.localizedName()
                         break
             else:
-                # Fallback to NSWorkspace
-                frontmost = NSWorkspace.sharedWorkspace().frontmostApplication()
+                frontmost = ax.GetFrontmostApplication()
                 if not frontmost:
                     logger.warning("No frontmost application found")
                     return TreeState()
                 pid = frontmost.processIdentifier()
                 app_name = frontmost.localizedName()
 
-            ax_app = AXUIElementCreateApplication(pid)
+            ax_app = ax.ControlFromPID(pid)
 
             # Try to get focused/main window
-            focused_window = None
-            error, focused_window = AXUIElementCopyAttributeValue(ax_app, kAXFocusedWindowAttribute, None)
+            focused_window = ax.GetAttribute(ax_app, ax.Attribute.FocusedWindow)
             
-            if error != kAXErrorSuccess or not focused_window:
-                error, focused_window = AXUIElementCopyAttributeValue(ax_app, kAXMainWindowAttribute, None)
+            if not focused_window:
+                focused_window = ax.GetAttribute(ax_app, ax.Attribute.MainWindow)
                 
-            if error != kAXErrorSuccess or not focused_window:
-                error, windows = AXUIElementCopyAttributeValue(ax_app, kAXWindowsAttribute, None)
-                if error == kAXErrorSuccess and windows and len(windows) > 0:
+            if not focused_window:
+                windows = ax.GetAttribute(ax_app, ax.Attribute.Windows)
+                if windows and len(windows) > 0:
                     focused_window = windows[0]
 
             window_title = ''
             if focused_window:
-                window_title = self.get_attr(focused_window, kAXTitleAttribute) or app_name
+                window_title = ax.GetAttribute(focused_window, ax.Attribute.Title) or app_name
 
             # Task 1: Scan focused window
             if focused_window:
                 bounds = None
-                pos = self.get_position(focused_window)
-                size = self.get_size(focused_window)
+                pos = ax.GetPosition(focused_window)
+                size = ax.GetSize(focused_window)
                 if pos and size:
                     bounds = BoundingBox.from_position_size(pos[0], pos[1], size[0], size[1])
                 tasks.append(('window', focused_window, window_title, bounds))
@@ -291,89 +173,79 @@ class Tree:
                 tasks.append(('dock', ax_dock, 'Dock', None))
 
             # Task 3: Scan Menu Bar of frontmost app
-            error, menu_bar = AXUIElementCopyAttributeValue(ax_app, 'AXMenuBar', None)
-            if error == kAXErrorSuccess and menu_bar:
+            menu_bar = ax.GetAttribute(ax_app, ax.Attribute.MenuBar)
+            if menu_bar:
                 tasks.append(('menubar', menu_bar, 'MenuBar', None))
 
             # Task 4: Scan Control Center (WiFi, Bluetooth, etc.)
             cc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.controlcenter"), None)
             if cc_app:
-                ax_cc = AXUIElementCreateApplication(cc_app.processIdentifier())
+                ax_cc = ax.ControlFromPID(cc_app.processIdentifier())
                 
-                # First, check for open Control Center windows/popovers
-                # When Control Center is clicked, it opens a floating window with toggles
-                error, cc_windows = AXUIElementCopyAttributeValue(ax_cc, kAXWindowsAttribute, None)
-                if error == kAXErrorSuccess and cc_windows and len(cc_windows) > 0:
-                    # Control Center has open windows - scan them for interactive elements
+                cc_windows = ax.GetAttribute(ax_cc, ax.Attribute.Windows)
+                if cc_windows and len(cc_windows) > 0:
                     for cc_window in cc_windows:
                         tasks.append(('control_center_window', cc_window, 'Control Center', None))
                 
-                # Also scan the Extras Menu Bar (status items in the menu bar)
-                error, cc_extras = AXUIElementCopyAttributeValue(ax_cc, "AXExtrasMenuBar", None)
-                if error == kAXErrorSuccess and cc_extras:
+                cc_extras = ax.GetAttribute(ax_cc, ax.Attribute.ExtrasMenuBar)
+                if cc_extras:
                     tasks.append(('control_center', cc_extras, 'Control Center', None))
                 
-                # Scan children directly for popovers and groups
-                cc_children = self.get_children(ax_cc)
+                cc_children = ax.GetChildren(ax_cc)
                 for child in cc_children:
-                    child_role = self.get_attr(child, kAXRoleAttribute)
-                    # Look for popovers, groups, or any visible containers
-                    if child_role in ('AXPopover', 'AXGroup', 'AXSheet'):
-                        is_hidden = self.get_attr(child, 'AXHidden')
+                    child_role = ax.GetAttribute(child, ax.Attribute.Role)
+                    if child_role in (ax.Role.Popover, ax.Role.Group, ax.Role.Sheet):
+                        is_hidden = ax.GetAttribute(child, ax.Attribute.Hidden)
                         if is_hidden is not True:
                             tasks.append(('control_center_popover', child, 'Control Center', None))
 
             # Task 4.5: Scan Notification Center (Date/Time, Widgets)
             nc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.notificationcenterui"), None)
             if nc_app:
-                ax_nc = AXUIElementCreateApplication(nc_app.processIdentifier())
+                ax_nc = ax.ControlFromPID(nc_app.processIdentifier())
                 
-                # Scan visible windows (The side panel is usually a window)
-                error, nc_windows = AXUIElementCopyAttributeValue(ax_nc, kAXWindowsAttribute, None)
-                if error == kAXErrorSuccess and nc_windows:
+                nc_windows = ax.GetAttribute(ax_nc, ax.Attribute.Windows)
+                if nc_windows:
                     for nc_window in nc_windows:
-                        # Only scan if visible
-                        is_hidden = self.get_attr(nc_window, 'AXHidden')
+                        is_hidden = ax.GetAttribute(nc_window, ax.Attribute.Hidden)
                         if is_hidden is not True:
                             tasks.append(('notification_center', nc_window, 'Notification Center', None))
                 
-                # Scan direct children (sometimes the panel is a root group)
-                nc_children = self.get_children(ax_nc)
+                nc_children = ax.GetChildren(ax_nc)
                 for child in nc_children:
-                    child_role = self.get_attr(child, kAXRoleAttribute)
-                    if child_role in ('AXScrollArea', 'AXGroup', 'AXList'):
-                        is_hidden = self.get_attr(child, 'AXHidden')
+                    child_role = ax.GetAttribute(child, ax.Attribute.Role)
+                    if child_role in (ax.Role.ScrollArea, ax.Role.Group, ax.Role.List):
+                        is_hidden = ax.GetAttribute(child, ax.Attribute.Hidden)
                         if is_hidden is not True:
                             tasks.append(('notification_center_child', child, 'Notification Center', None))
 
             # Task 5: Scan SystemUIServer (battery, volume, etc.)
             ss_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.systemuiserver"), None)
             if ss_app:
-                ax_ss = AXUIElementCreateApplication(ss_app.processIdentifier())
-                error, ss_menu = AXUIElementCopyAttributeValue(ax_ss, kAXMenuBarAttribute, None)
-                if error == kAXErrorSuccess and ss_menu:
+                ax_ss = ax.ControlFromPID(ss_app.processIdentifier())
+                ss_menu = ax.GetAttribute(ax_ss, ax.Attribute.MenuBar)
+                if ss_menu:
                     tasks.append(('system_ui', ss_menu, 'SystemUI', None))
 
             # Task 6: Scan Spotlight
             sl_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.Spotlight"), None)
             if sl_app:
-                ax_sl = AXUIElementCreateApplication(sl_app.processIdentifier())
-                error, sl_extras = AXUIElementCopyAttributeValue(ax_sl, "AXExtrasMenuBar", None)
-                if error == kAXErrorSuccess and sl_extras:
+                ax_sl = ax.ControlFromPID(sl_app.processIdentifier())
+                sl_extras = ax.GetAttribute(ax_sl, ax.Attribute.ExtrasMenuBar)
+                if sl_extras:
                     tasks.append(('spotlight', sl_extras, 'Spotlight', None))
 
             # Task 7: Scan Desktop Icons (Finder) - only if no foreground window
-            # Desktop items are only relevant when no app window is covering them
             if not focused_window:
                 finder_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.finder"), None)
                 if finder_app:
-                    ax_finder = AXUIElementCreateApplication(finder_app.processIdentifier())
-                    error, finder_children = AXUIElementCopyAttributeValue(ax_finder, kAXChildrenAttribute, None)
-                    if error == kAXErrorSuccess and finder_children:
+                    ax_finder = ax.ControlFromPID(finder_app.processIdentifier())
+                    finder_children = ax.GetChildren(ax_finder)
+                    if finder_children:
                         for child in finder_children:
-                            role = self.get_attr(child, kAXRoleAttribute)
-                            desc = self.get_attr(child, kAXDescriptionAttribute)
-                            if role == 'AXScrollArea' and desc == 'desktop':
+                            role = ax.GetAttribute(child, ax.Attribute.Role)
+                            desc = ax.GetAttribute(child, ax.Attribute.Description)
+                            if role == ax.Role.ScrollArea and desc == 'desktop':
                                 tasks.append(('desktop', child, 'Desktop', None))
                                 break
 
@@ -385,7 +257,6 @@ class Tree:
                 for _, element, name, bounds in tasks
             ]
 
-            # Collect results from all threads
             for future in as_completed(futures):
                 try:
                     elements, scrollables = future.result()
@@ -443,20 +314,20 @@ class Tree:
             pass
 
         # Check if hidden
-        is_hidden = self.get_attr(element, 'AXHidden')
+        is_hidden = ax.GetAttribute(element, ax.Attribute.Hidden)
         if is_hidden is True:
             return
 
-        role = self.get_attr(element, kAXRoleAttribute)
-        title = self.get_attr(element, kAXTitleAttribute)
-        description = self.get_attr(element, kAXDescriptionAttribute)
-        value = self.get_attr(element, 'AXValue')
-        subrole = self.get_attr(element, kAXSubroleAttribute)
-        is_enabled = self.get_attr(element, 'AXEnabled')
-        actions = self.get_attr(element, 'AXActions')
+        role = ax.GetAttribute(element, ax.Attribute.Role)
+        title = ax.GetAttribute(element, ax.Attribute.Title)
+        description = ax.GetAttribute(element, ax.Attribute.Description)
+        value = ax.GetAttribute(element, ax.Attribute.Value)
+        subrole = ax.GetAttribute(element, ax.Attribute.Subrole)
+        is_enabled = ax.GetAttribute(element, ax.Attribute.Enabled)
+        actions = ax.GetAttribute(element, ax.Attribute.Actions)
 
-        pos = self.get_position(element)
-        size = self.get_size(element)
+        pos = ax.GetPosition(element)
+        size = ax.GetSize(element)
 
         x, y, w, h = 0, 0, 0, 0
         if pos and size:
@@ -465,8 +336,7 @@ class Tree:
 
         # Check if element has valid geometry
         if w <= 0 or h <= 0:
-            # Skip elements with no visible size, but traverse children
-            for child in self.get_children(element):
+            for child in ax.GetChildren(element):
                 self.tree_traversal(
                     child, window_name, visited,
                     interactive_elements, scrollable_elements,
@@ -476,56 +346,39 @@ class Tree:
 
         bbox = BoundingBox.from_position_size(x, y, w, h)
         if root_bounds:
-            # Clip bounding box to window bounds
             clipped_bbox = bbox.intersection(root_bounds)
             if not clipped_bbox:
-                # Element is completely outside window
                 return
             bbox = clipped_bbox
 
         has_actions = self.has_interactive_actions(actions)
         
-        # Get focused state
-        is_focused_attr = self.get_attr(element, 'AXFocused')
+        is_focused_attr = ax.GetAttribute(element, ax.Attribute.Focused)
         is_focused = is_focused_attr is True
         
-        # Containers that we should traverse into but not mark as interactive
-        is_container = role in {
-            'AXWindow', 'AXToolbar', 'AXGroup', 'AXScrollArea', 
-            'AXSplitGroup', 'AXList', 'AXTabGroup', 'AXWebArea',
-            'AXPopover', 'AXSheet', 'AXLayoutArea', 'AXLayoutItem',
-        }
+        is_container = role in ax.CONTAINER_ROLES
 
-        # Special Case: AXGroup with actions and label should be treated as interactive, not just a container.
-        # This is common in SwiftUI where a Group acts as a button.
-        if role == 'AXGroup' and has_actions and (title or description or value):
+        # Special Case: AXGroup with actions and label should be treated as interactive
+        if role == ax.Role.Group and has_actions and (title or description or value):
             is_container = False
         
         # Check if this is a scrollable element
-        if role in SCROLLABLE_ROLES:
+        if role in ax.SCROLLABLE_ROLES:
             scroll_node = self._create_scroll_node(
                 element, role, title, description, window_name, bbox, is_focused
             )
             if scroll_node:
                 scrollable_elements.append(scroll_node)
         
-        # Check if this is an interactive element
-        # An element is interactive if:
-        # 1. It has an interactive role and is enabled, OR
-        # 2. It has interactive actions (AXPress, AXConfirm, etc.), OR
-        # 3. It has a window control subrole (close, minimize, zoom buttons)
         is_interactive = (
-            (role in INTERACTIVE_ROLES and is_enabled is not False) or 
+            (role in ax.INTERACTIVE_ROLES and is_enabled is not False) or 
             has_actions or 
-            subrole in WINDOW_CONTROL_SUBROLES
+            subrole in ax.WINDOW_CONTROL_SUBROLES
         )
         
-        # For non-container elements that are interactive
         if not is_container and is_interactive and (title or description or value or has_actions or subrole):
-            # Reject interactive elements with 0 width or height
             if w == 0 or h == 0:
-                # Element has no visible size, traverse children instead
-                for child in self.get_children(element):
+                for child in ax.GetChildren(element):
                     self.tree_traversal(
                         child, window_name, visited,
                         interactive_elements, scrollable_elements
@@ -535,12 +388,10 @@ class Tree:
             bbox = BoundingBox.from_position_size(x, y, w, h)
             center = bbox.get_center()
             
-            # Get friendly label for window controls
-            friendly_subrole = WINDOW_CONTROL_SUBROLES.get(subrole, subrole or '')
+            friendly_subrole = ax.WINDOW_CONTROL_SUBROLES.get(subrole, subrole or '')
             label = title or description or value or friendly_subrole or "(no label)"
             
-            # Get role description (human readable type, e.g. "button", "text field")
-            role_description = self.get_attr(element, 'AXRoleDescription')
+            role_description = ax.GetAttribute(element, ax.Attribute.RoleDescription)
 
             node = TreeElementNode(
                 bounding_box=bbox,
@@ -558,11 +409,10 @@ class Tree:
             )
             interactive_elements.append(node)
             
-            # If interactive, don't traverse further inside
             return
 
-        # Recurse into children (for containers and non-interactive elements)
-        for child in self.get_children(element):
+        # Recurse into children
+        for child in ax.GetChildren(element):
             self.tree_traversal(
                 child, window_name, visited,
                 interactive_elements, scrollable_elements,
@@ -578,7 +428,7 @@ class Tree:
             return 0.0
         
         try:
-            value = self.get_attr(scrollbar, 'AXValue')
+            value = ax.GetAttribute(scrollbar, ax.Attribute.Value)
             if value is not None:
                 return float(value)
         except (TypeError, ValueError):
@@ -600,20 +450,15 @@ class Tree:
         Create a ScrollElementNode from a scrollable element.
         Returns None if the element has no scroll capability.
         """
-        # Get horizontal and vertical scrollbars
-        h_scrollbar = self.get_attr(element, 'AXHorizontalScrollBar')
-        v_scrollbar = self.get_attr(element, 'AXVerticalScrollBar')
+        h_scrollbar = ax.GetAttribute(element, ax.Attribute.HorizontalScrollBar)
+        v_scrollbar = ax.GetAttribute(element, ax.Attribute.VerticalScrollBar)
         
-        # Check if element is actually scrollable
         h_scrollable = h_scrollbar is not None
         v_scrollable = v_scrollbar is not None
         
-        # Alternative: check scroll range attributes for elements without explicit scrollbars
         if not h_scrollable and not v_scrollable:
-            # Check if there's content that exceeds visible area
-            # Some elements use AXVisibleCharacterRange or similar
-            visible_rows = self.get_attr(element, 'AXVisibleRows')
-            all_rows = self.get_attr(element, 'AXRows')
+            visible_rows = ax.GetAttribute(element, ax.Attribute.VisibleRows)
+            all_rows = ax.GetAttribute(element, ax.Attribute.Rows)
             if visible_rows and all_rows:
                 try:
                     if len(all_rows) > len(visible_rows):
@@ -621,15 +466,12 @@ class Tree:
                 except (TypeError, AttributeError):
                     pass
         
-        # If not scrollable at all, don't create a node
         if not h_scrollable and not v_scrollable:
             return None
         
-        # Get scroll percentages (0.0 to 1.0 from AXValue, convert to 0-100)
         h_percent = self._get_scrollbar_value(h_scrollbar) * 100.0
         v_percent = self._get_scrollbar_value(v_scrollbar) * 100.0
         
-        # Create label
         label = title or description or role or '(scrollable)'
         
         return ScrollElementNode(
@@ -647,17 +489,12 @@ class Tree:
 
     def on_focus_changed(self, element):
         """Handle focus change events from WatchDog."""
-        # Debounce duplicate events
         import time
         current_time = time.time()
         
-        # We can't easily get unique ID like RuntimeId in Windows, 
-        # but we can try to get role/title to filter duplicates roughly if needed.
-        # For now just log it.
-        
         try:
-            role = self.get_attr(element, kAXRoleAttribute)
-            title = self.get_attr(element, kAXTitleAttribute)
+            role = ax.GetAttribute(element, ax.Attribute.Role)
+            title = ax.GetAttribute(element, ax.Attribute.Title)
             logger.info(f"[WatchDog] Focus changed to: '{title}' ({role})")
         except Exception:
             pass

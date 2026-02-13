@@ -6,12 +6,12 @@ from datetime import datetime
 from getpass import getuser
 from typing import Literal
 from pathlib import Path
-import pyautogui as pg
+import macos_use.ax as ax
 
 class Prompt:
     @staticmethod
     def system(mode:Literal["flash","normal"],desktop:Desktop,browser: Browser,max_steps:int,instructions: list[str]=[]) -> str:
-        width, height = pg.size()
+        width, height = ax.GetScreenSize()
         match mode:
             case "flash":
                 template =Path(files('macos_use.agent.prompt').joinpath('system_flash.md')).read_text(encoding='utf-8')
@@ -40,7 +40,7 @@ class Prompt:
          
     @staticmethod
     def human(query:str,step:int,max_steps:int,desktop:Desktop) -> str:
-        cursor_location = pg.position()
+        cursor_location = ax.GetCursorPos()
         desktop_state=desktop.desktop_state
         template = Path(files('macos_use.agent.prompt').joinpath('human.md')).read_text(encoding='utf-8')
 
@@ -49,7 +49,7 @@ class Prompt:
             'max_steps': max_steps,
             'active_window': desktop_state.active_window_to_string(),
             'windows': desktop_state.windows_to_string(),
-            'cursor_location': f'({cursor_location.x},{cursor_location.y})',
+            'cursor_location': f'({cursor_location[0]},{cursor_location[1]})',
             'interactive_elements': desktop_state.tree_state.interactive_elements_to_string() if desktop.use_accessibility else 'No accessability data is available',
             'scrollable_elements': desktop_state.tree_state.scrollable_elements_to_string() if desktop.use_accessibility else 'No accessability data is available',
             'query':query

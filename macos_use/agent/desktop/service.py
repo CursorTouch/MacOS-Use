@@ -1,29 +1,26 @@
 """
 Desktop service for macOS desktop state management and actions.
 Provides methods for capturing desktop state, managing applications, and performing input actions.
+
+Now uses the centralized ax module for accessibility, screen, mouse/keyboard, and window operations.
 """
+import macos_use.ax as ax
 from macos_use.agent.desktop.views import DesktopState, Window, Size, Status, Browser
 from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_IDS
-from Cocoa import NSWorkspace, NSApplicationActivateIgnoringOtherApps
 from macos_use.agent.tree.views import BoundingBox
 from markdownify import markdownify as md
 from macos_use.agent.tree.service import Tree
 from typing import Literal, Optional
-from PIL import Image, ImageGrab
+from PIL import Image
 from io import BytesIO
-import pyautogui as pg
-import requests
-import subprocess
 import Quartz
+import requests
 import logging
 import time
 import os
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
-pg.FAILSAFE = False
-pg.PAUSE = 0.5
 
 
 class Desktop:
@@ -41,87 +38,27 @@ class Desktop:
 
     def get_screen_size(self) -> Size:
         """Get the combined resolution of all active displays (virtual screen size)."""
-        try:
-            # Get all active displays
-            max_displays = 32
-            # Returns (error, display_ids, count)
-            res = Quartz.CGGetActiveDisplayList(max_displays, None, None)
-            
-            if res and res[1]:
-                display_ids = res[1]
-                
-                min_x = float('inf')
-                min_y = float('inf')
-                max_x = float('-inf')
-                max_y = float('-inf')
-                
-                for display_id in display_ids:
-                    bounds = Quartz.CGDisplayBounds(display_id)
-                    x = bounds.origin.x
-                    y = bounds.origin.y
-                    w = bounds.size.width
-                    h = bounds.size.height
-                    
-                    min_x = min(min_x, x)
-                    min_y = min(min_y, y)
-                    max_x = max(max_x, x + w)
-                    max_y = max(max_y, y + h)
-                
-                return Size(width=int(max_x - min_x), height=int(max_y - min_y))
-                
-        except Exception as e:
-            logger.warning(f"Failed to calculate virtual screen size: {e}")
-
-        # Fallback to main display
-        main_display = Quartz.CGMainDisplayID()
-        width = Quartz.CGDisplayPixelsWide(main_display)
-        height = Quartz.CGDisplayPixelsHigh(main_display)
+        width, height = ax.GetScreenSize()
         return Size(width=width, height=height)
 
     def get_macos_version(self) -> str:
         """Get the macOS version."""
-        try:
-            result = subprocess.run(['sw_vers', '-productVersion'], capture_output=True, text=True)
-            version = result.stdout.strip()
-            name_result = subprocess.run(['sw_vers', '-productName'], capture_output=True, text=True)
-            name = name_result.stdout.strip()
-            return f"{name} {version}"
-        except Exception:
-            return "macOS"
+        return ax.GetMacOSVersion()
 
     def get_dpi_scaling(self) -> str:
         """Get the scale factor of the main display."""
-        try:
-            # On macOS, we can get this from the backing scale factor of the main screen
-            # or just assume 2.0 for Retina if we can't get it easily.
-            # Using Quartz to find the scale factor.
-            main_display = Quartz.CGMainDisplayID()
-            # This doesn't directly give scale, but we can check the pixel width vs point width
-            pixel_width = Quartz.CGDisplayPixelsWide(main_display)
-            bounds = Quartz.CGDisplayBounds(main_display)
-            point_width = bounds.size.width
-            scale = round(pixel_width / point_width, 1)
-            return f"{scale}x"
-        except Exception:
-            return "1.0x"
+        scale = ax.GetDPIScale()
+        return f"{scale}x"
 
     def get_default_language(self) -> str:
         """Get the default system language."""
-        try:
-            result = subprocess.run(['defaults', 'read', '-g', 'AppleLanguages'], capture_output=True, text=True)
-            # Output is like "(en-US, ...)"
-            langs = result.stdout.strip()
-            if langs.startswith('('):
-                first_lang = langs.split(',')[0].strip('() "')
-                return first_lang
-            return "en-US"
-        except Exception:
-            return "en-US"
+        return ax.GetDefaultLanguage()
 
     def get_user_account_type(self) -> str:
         """Check if the current user is an admin."""
         try:
             user = os.getlogin()
+            import subprocess
             result = subprocess.run(['dscl', '.', '-read', '/Groups/admin', 'GroupMembership'], capture_output=True, text=True)
             if user in result.stdout:
                 return "Admin"
@@ -140,32 +77,18 @@ class Desktop:
         Returns:
             Screenshot as bytes or PIL Image.
         """
-        # Use Quartz to capture the screen directly (no temp files, no screencapture CLI)
         try:
-            # CGWindowListCreateImage captures the full virtual screen
-            cg_image = Quartz.CGWindowListCreateImage(
-                Quartz.CGRectInfinite,
-                Quartz.kCGWindowListOptionOnScreenOnly,
-                Quartz.kCGNullWindowID,
-                Quartz.kCGWindowImageDefault,
-            )
+            cg_image = ax.CaptureScreen()
             if cg_image is None:
                 raise RuntimeError(
                     "CGWindowListCreateImage returned None – "
                     "grant Screen Recording permission in "
                     "System Settings > Privacy & Security > Screen Recording"
                 )
-            width = Quartz.CGImageGetWidth(cg_image)
-            height = Quartz.CGImageGetHeight(cg_image)
-            bytes_per_row = Quartz.CGImageGetBytesPerRow(cg_image)
-            pixel_data = Quartz.CGDataProviderCopyData(
-                Quartz.CGImageGetDataProvider(cg_image)
-            )
-            img = Image.frombuffer(
-                "RGBA", (width, height), pixel_data, "raw", "BGRA", bytes_per_row, 1
-            )
+            img = ax.CGImageToPIL(cg_image)
         except Exception as e:
             logger.warning(f"Quartz screen capture failed, falling back to ImageGrab: {e}")
+            from PIL import ImageGrab
             img = ImageGrab.grab(all_screens=True)
         
         # Apply scaling if needed
@@ -193,7 +116,6 @@ class Desktop:
             Annotated PIL Image.
         """
         from PIL import ImageDraw, ImageFont
-        from concurrent.futures import ThreadPoolExecutor
         import random
         
         screenshot = self.get_screenshot(as_bytes=False, scale=1.0)
@@ -205,26 +127,17 @@ class Desktop:
         max_logical_x, max_logical_y = 0, 0
         dpi_scale = 1.0
         try:
-            max_displays = 32
-            # (error, display_ids, count)
-            res = Quartz.CGGetActiveDisplayList(max_displays, None, None)
-            if res and len(res) > 1:
-                display_ids = res[1]
-                for display_id in display_ids:
-                    bounds = Quartz.CGDisplayBounds(display_id)
-                    x = bounds.origin.x
-                    y = bounds.origin.y
-                    w = bounds.size.width
-                    h = bounds.size.height
-                    if x < min_x: min_x = int(x)
-                    if y < min_y: min_y = int(y)
-                    max_logical_x = max(max_logical_x, x + w)
-                    max_logical_y = max(max_logical_y, y + h)
-                # Compute DPI scale from actual screenshot pixels vs logical screen size
-                # This is the most reliable method as CGDisplayPixelsWide can be unreliable
-                logical_width = max_logical_x - min_x
-                if logical_width > 0:
-                    dpi_scale = screenshot.width / logical_width
+            display_bounds = ax.GetDisplayBounds()
+            for bounds in display_bounds:
+                if bounds.left < min_x:
+                    min_x = int(bounds.left)
+                if bounds.top < min_y:
+                    min_y = int(bounds.top)
+                max_logical_x = max(max_logical_x, bounds.right)
+                max_logical_y = max(max_logical_y, bounds.bottom)
+            logical_width = max_logical_x - min_x
+            if logical_width > 0:
+                dpi_scale = screenshot.width / logical_width
         except Exception as e:
             logger.warning(f"Failed to get display bounds: {e}")
         
@@ -238,7 +151,6 @@ class Desktop:
         draw = ImageDraw.Draw(padded_screenshot)
         font_size = int(12 * dpi_scale)
         try:
-            # Try to load a system font
             font = ImageFont.truetype('/System/Library/Fonts/Helvetica.ttc', font_size)
         except IOError:
             try:
@@ -253,8 +165,6 @@ class Desktop:
             box = node.bounding_box
             color = get_random_color()
             
-            # Adjust for virtual screen origin, Retina DPI scale, and padding
-            # Accessibility coordinates are in logical points; screenshot is in physical pixels
             left = int((box.left - min_x) * dpi_scale) + padding
             top = int((box.top - min_y) * dpi_scale) + padding
             right = int((box.right - min_x) * dpi_scale) + padding
@@ -262,35 +172,27 @@ class Desktop:
             
             adjusted_box = (left, top, right, bottom)
             
-            # Draw bounding box
             draw.rectangle(adjusted_box, outline=color, width=2)
             
-            # Label dimensions
             label_width = draw.textlength(str(label), font=font)
             label_height = font_size
             
-            # Label position above bounding box
             label_x1 = right - label_width - 4
             label_y1 = top - label_height - 4
             label_x2 = label_x1 + label_width + 4
             label_y2 = label_y1 + label_height + 4
             
-            # Keep label within image bounds
             if label_y1 < 0:
                 label_y1 = top + 2
                 label_y2 = label_y1 + label_height + 4
             
-            # Draw label background and text
             draw.rectangle([(label_x1, label_y1), (label_x2, label_y2)], fill=color)
             draw.text((label_x1 + 2, label_y1 + 2), str(label), fill=(255, 255, 255), font=font)
         
-        # Draw annotations
-        # Using loop instead of ThreadPool for simplicity with shared draw context
         nodes_with_indices = list(enumerate(nodes))
         for i, node in nodes_with_indices:
             draw_annotation(i, node)
         
-        # Apply scaling if needed
         if scale < 1.0:
             new_width = int(padded_screenshot.width * scale)
             new_height = int(padded_screenshot.height * scale)
@@ -307,30 +209,14 @@ class Desktop:
     ) -> DesktopState:
         """
         Capture the current desktop state including windows and accessibility tree.
-        
-        Args:
-            use_annotation: If True, draw numbered labels on interactive elements in screenshot.
-            use_vision: If True, include a screenshot.
-            use_dom: If True, include DOM information for browsers.
-            as_bytes: If True, return screenshot as bytes.
-            scale: Scale factor for the screenshot.
-        
-        Returns:
-            DesktopState with windows, active window, tree state, and optional screenshot.
         """
-        # Get running applications and their windows
-        # get_windows now returns a tuple (windows, frontmost_pid)
         windows, frontmost_pid = self.get_windows()
         active_window = self.get_active_window(windows, frontmost_pid=frontmost_pid)
         
-        # Get accessibility tree state
-        # Pass the active PID so the tree uses the same (reliable) frontmost app
-        # instead of re-querying NSWorkspace which can return stale data.
         active_pid = active_window.pid if active_window else None
         window_name = active_window.name if active_window else ''
         tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid)
         
-        # Capture screenshot if requested
         screenshot = None
         if use_vision:
             if use_annotation:
@@ -360,47 +246,34 @@ class Desktop:
         Returns (windows, frontmost_pid).
         """
         windows = []
-        workspace = NSWorkspace.sharedWorkspace()
         
-        # Get window list from Quartz - includes on-screen windows
-        # Returned in order from front to back
-        window_list = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID
-        )
+        # Get window list using ax module
+        window_list = ax.GetWindowList(on_screen_only=True)
         
         # Identify frontmost PID from z-order
         frontmost_pid = None
-        if window_list:
-            for win_info in window_list:
-                # Normal windows live at layer 0; skip menu-bar items, overlays, etc.
-                layer = win_info.get(Quartz.kCGWindowLayer, -1)
-                if layer != 0:
-                    continue
-                pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
-                if pid:
-                    frontmost_pid = pid
-                    break
+        for win_info in window_list:
+            layer = win_info.get(Quartz.kCGWindowLayer, -1)
+            if layer != 0:
+                continue
+            pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
+            if pid:
+                frontmost_pid = pid
+                break
 
         # Create a mapping of PID to window info
         pid_windows = {}
-        for win_info in window_list or []:
+        for win_info in window_list:
             pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
             if pid not in pid_windows:
                 pid_windows[pid] = []
             pid_windows[pid].append(win_info)
         
         # Get running applications
-        running_apps = workspace.runningApplications()
-        
-        # NSApplicationActivationPolicy values:
-        # 0 = Regular (shows in Dock, user-facing apps)
-        # 1 = Accessory (no Dock icon, menu bar apps)
-        # 2 = Prohibited (background-only, daemons/services)
+        running_apps = ax.GetRunningApplications()
+        screen_size = ax.GetScreenSize()
         
         for app in running_apps:
-            # Only include regular apps (user-facing, show in Dock)
-            # activationPolicy() == 0 means NSApplicationActivationPolicyRegular
             if app.activationPolicy() != 0:
                 continue
             
@@ -412,19 +285,15 @@ class Desktop:
             pid = app.processIdentifier()
             is_browser = bundle_id in BROWSER_BUNDLE_IDS
             
-            # Check window info from Quartz
             app_windows = pid_windows.get(pid, [])
             
-            # Determine status and bounds
             if app.isHidden():
                 status = Status.HIDDEN
                 bbox = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
             elif not app_windows:
-                # App is running but has no on-screen windows (minimized or no windows)
                 status = Status.MINIMIZED
                 bbox = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
             else:
-                # Get bounds from the first/main window
                 main_window = app_windows[0]
                 bounds = main_window.get(Quartz.kCGWindowBounds, {})
                 
@@ -442,12 +311,7 @@ class Desktop:
                     height=height
                 )
                 
-                # Check if window is on-screen (layer > 0 typically means normal window)
-                layer = main_window.get(Quartz.kCGWindowLayer, 0)
-                
-                # Check if window is fullscreen (fills screen)
-                screen_size = pg.size()
-                if width >= screen_size.width and height >= screen_size.height - 50:
+                if width >= screen_size[0] and height >= screen_size[1] - 50:
                     status = Status.FULL_SCREEN
                 else:
                     status = Status.NORMAL
@@ -464,52 +328,20 @@ class Desktop:
         return windows, frontmost_pid
 
     def _get_frontmost_pid(self) -> Optional[int]:
-        """Get the PID of the frontmost application using CGWindowListCopyWindowInfo.
-        
-        This queries the window server directly and does not rely on
-        NSWorkspace (which can return stale data without an active NSRunLoop).
-        It finds the topmost on-screen, normal-level window that belongs to
-        a regular application.
-        """
-        window_list = Quartz.CGWindowListCopyWindowInfo(
-            Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
-            Quartz.kCGNullWindowID
-        )
-        if not window_list:
-            return None
-
-        for win_info in window_list:
-            # Normal windows live at layer 0; skip menu-bar items, overlays, etc.
-            layer = win_info.get(Quartz.kCGWindowLayer, -1)
-            if layer != 0:
-                continue
-            pid = win_info.get(Quartz.kCGWindowOwnerPID, 0)
-            if pid:
-                return pid
-
-        return None
+        """Get the PID of the frontmost application using CGWindowListCopyWindowInfo."""
+        return ax.GetForegroundWindowPID()
 
     def get_active_window(self, windows: list[Window] = None, frontmost_pid: Optional[int] = None) -> Optional[Window]:
-        """
-        Get the currently active/focused window.
-        
-        Args:
-            windows: Optional list of known windows to search in.
-            frontmost_pid: Optional known frontmost PID to avoid re-querying.
-        """
+        """Get the currently active/focused window."""
         if frontmost_pid is None:
             frontmost_pid = self._get_frontmost_pid()
 
-        # Try to match the PID against our known windows list
         if frontmost_pid and windows:
             for window in windows:
                 if window.pid == frontmost_pid:
                     return window
 
-        # Fallback: use NSWorkspace (may be stale but still useful as last resort)
-        workspace = NSWorkspace.sharedWorkspace()
-        frontmost = workspace.frontmostApplication()
-
+        frontmost = ax.GetFrontmostApplication()
         if not frontmost:
             return None
 
@@ -518,7 +350,6 @@ class Desktop:
                 if window.pid == frontmost.processIdentifier():
                     return window
 
-        # Create window from frontmost app
         app_name = frontmost.localizedName()
         bundle_id = frontmost.bundleIdentifier() or ''
         pid = frontmost.processIdentifier()
@@ -540,18 +371,7 @@ class Desktop:
         loc: Optional[tuple[int, int]] = None,
         size: Optional[tuple[int, int]] = None
     ) -> str:
-        """
-        Manage applications: launch, switch to, or resize.
-        
-        Args:
-            mode: 'launch' to open app, 'switch' to focus app, 'resize' to resize window.
-            name: Application name for launch/switch modes.
-            loc: Window location (x, y) for resize mode.
-            size: Window size (width, height) for resize mode.
-        
-        Returns:
-            Status message.
-        """
+        """Manage applications: launch, switch to, or resize."""
         match mode:
             case 'launch':
                 if not name:
@@ -567,32 +387,19 @@ class Desktop:
                 return f"Error: Unknown mode '{mode}'"
 
     def launch_app(self, name: str) -> str:
-        """
-        Launch an application by name or bundle ID.
-        
-        Args:
-            name: Application name (e.g., "Safari") or bundle ID (e.g., "com.apple.Safari")
-        
-        Returns:
-            Status message.
-        """
+        """Launch an application by name or bundle ID."""
+        import subprocess
         last_error = None
         
-        # Check if it looks like a bundle ID (contains dots like com.apple.Safari)
         if '.' in name and not name.endswith('.app'):
-            # Try launching by bundle ID
             try:
                 subprocess.run(['open', '-b', name], check=True, capture_output=True, text=True)
                 return f"Launched {name}"
             except subprocess.CalledProcessError as e:
                 last_error = e.stderr.strip() if e.stderr else str(e)
         
-        # Try launching by app name using 'open -a' (flexible, case-insensitive)
-        try:
-            subprocess.run(['open', '-a', name], check=True, capture_output=True, text=True)
+        if ax.LaunchApplication(name):
             return f"Launched {name}"
-        except subprocess.CalledProcessError as e:
-            last_error = e.stderr.strip() if e.stderr else str(e)
         
         # Try to find the app using Spotlight (mdfind)
         try:
@@ -602,70 +409,49 @@ class Desktop:
             )
             apps = result.stdout.strip().split('\n')
             if apps and apps[0]:
-                # Launch the first matching app
                 subprocess.run(['open', apps[0]], check=True, capture_output=True)
                 return f"Launched {apps[0].split('/')[-1].replace('.app', '')}"
         except subprocess.CalledProcessError as e:
             last_error = e.stderr.strip() if e.stderr else str(e)
         
-        # Final fallback: NSWorkspace
-        workspace = NSWorkspace.sharedWorkspace()
-        if workspace.launchApplication_(name):
-            return f"Launched {name}"
-        
-        # App not found - return error
         if last_error and "Unable to find application" in last_error:
             return f"Application '{name}' not found"
         return f"Failed to launch '{name}': Application not found"
 
     def _resolve_app_pid(self, name: str) -> Optional[int]:
         """Resolve an application name to its PID (if currently running)."""
-        workspace = NSWorkspace.sharedWorkspace()
-        for app in workspace.runningApplications():
+        for app in ax.GetRunningApplications():
             if app.localizedName() == name:
                 return app.processIdentifier()
         return None
 
     def _wait_for_app_focus(self, target_pid: int, timeout: float = 3.0, interval: float = 0.2) -> bool:
-        """Poll the window server until *target_pid* owns the topmost window.
-
-        Returns True if the app became frontmost within *timeout* seconds.
-        """
+        """Poll the window server until target_pid owns the topmost window."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            frontmost_pid = self._get_frontmost_pid()
+            frontmost_pid = ax.GetForegroundWindowPID()
             if frontmost_pid == target_pid:
                 return True
             time.sleep(interval)
         return False
 
     def switch_app(self, name: str) -> str:
-        """Switch to an application by name.
-
-        After sending the activation command, polls the window server to
-        verify that the target app actually became the frontmost window
-        before returning.
-        """
+        """Switch to an application by name."""
         target_pid = self._resolve_app_pid(name)
 
-        # Try AppleScript first as it's more robust for switching and unminimizing
         applescript = f'tell application "{name}" to activate'
         try:
+            import subprocess
             subprocess.run(['osascript', '-e', applescript], check=True, capture_output=True)
-        except subprocess.CalledProcessError:
-            # Fallback to NSWorkspace if AppleScript fails
+        except Exception:
             if target_pid is not None:
-                workspace = NSWorkspace.sharedWorkspace()
-                for app in workspace.runningApplications():
-                    if app.processIdentifier() == target_pid:
-                        app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-                        break
+                if ax.ActivateApplication(target_pid):
+                    pass
                 else:
                     return f"Application '{name}' not found running"
             else:
                 return f"Application '{name}' not found running"
 
-        # Wait for macOS to actually complete the focus transition
         if target_pid is not None:
             if self._wait_for_app_focus(target_pid):
                 return f"Switched to {name}"
@@ -673,14 +459,11 @@ class Desktop:
                 logger.warning(f"Timed out waiting for '{name}' (PID {target_pid}) to become frontmost")
                 return f"Switched to {name} (focus may be delayed)"
         
-        # Could not resolve PID; add a small grace period as best-effort
         time.sleep(0.5)
         return f"Switched to {name}"
 
     def resize_app(self, loc: tuple[int, int] = None, size: tuple[int, int] = None) -> str:
         """Resize the active window (requires Accessibility permissions)."""
-        # Note: Full window resize requires using AppleScript or Accessibility API
-        # This is a simplified placeholder
         if loc or size:
             script = []
             if loc:
@@ -695,68 +478,32 @@ class Desktop:
                 end tell
             end tell
             '''
-            try:
-                subprocess.run(['osascript', '-e', applescript], check=True, capture_output=True)
+            response, status = ax.ExecuteCommand(applescript, mode='osascript', timeout=15)
+            if status == 0:
                 return f"Resized window to loc={loc}, size={size}"
-            except subprocess.CalledProcessError as e:
-                return f"Failed to resize: {e}"
+            return f"Failed to resize: {response}"
         
         return "No resize parameters provided"
 
     def execute_command(self, command: str, mode: str = 'shell', timeout: int = 10) -> tuple[str, int]:
-        """
-        Execute a command in shell or osascript mode.
-        
-        Args:
-            command: Command to execute.
-            mode: 'shell' for bash commands, 'osascript' for AppleScript.
-            timeout: Timeout in seconds.
-        
-        Returns:
-            Tuple of (output, return_code).
-        """
-        env = os.environ.copy()
-        try:
-            if mode == 'osascript':
-                # Execute AppleScript using osascript
-                result = subprocess.run(
-                    ['osascript', '-e', command],
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    env=env
-                )
-            else:
-                # Execute shell command
-                result = subprocess.run(
-                    command,
-                    shell=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout,
-                    env=env
-                )
-            output = result.stdout or result.stderr or ''
-            return (output.strip(), result.returncode)
-        except subprocess.TimeoutExpired:
-            return (f"Command timed out after {timeout} seconds", -1)
-        except Exception as e:
-            return (str(e), -1)
+        """Execute a command in shell or osascript mode."""
+        return ax.ExecuteCommand(command, mode=mode, timeout=timeout)
 
     def click(self, loc: tuple[int, int], button: str = 'left', clicks: int = 1):
-        """
-        Perform a mouse click at the specified coordinates.
-        
-        Args:
-            loc: (x, y) coordinates.
-            button: 'left', 'right', or 'middle'.
-            clicks: Number of clicks (0 for hover only, 1 for single, 2 for double).
-        """
+        """Perform a mouse click at the specified coordinates."""
         x, y = loc
-        pg.moveTo(x, y)
+        ax.MoveTo(x, y)
         if clicks > 0:
             time.sleep(0.05)
-            pg.click(x=x, y=y, button=button, clicks=clicks)
+            if button == 'right':
+                ax.RightClick(x, y)
+            elif button == 'middle':
+                ax.MiddleClick(x, y)
+            elif clicks == 2:
+                ax.DoubleClick(x, y)
+            else:
+                for _ in range(clicks):
+                    ax.Click(x, y)
 
     @staticmethod
     def _is_truthy(value) -> bool:
@@ -775,44 +522,31 @@ class Desktop:
         clear: bool = False,
         press_enter: bool = False
     ):
-        """
-        Type text at the specified coordinates.
-
-        Uses the macOS clipboard (pbcopy + Cmd-V) instead of simulating
-        individual key presses, which avoids focus-loss, Unicode issues,
-        and keyboard-layout problems that affect pyautogui.typewrite().
-        
-        Args:
-            loc: (x, y) coordinates to click before typing.
-            text: Text to type.
-            caret_position: Where to position caret ('start', 'idle', 'end').
-            clear: If True, clear existing text before typing.
-            press_enter: If True, press Enter after typing.
-        """
-        # Normalise string 'true'/'false' coming from the LLM tool call
+        """Type text at the specified coordinates."""
         clear = self._is_truthy(clear)
         press_enter = self._is_truthy(press_enter)
 
         x, y = loc
-        pg.click(x=x, y=y)
+        ax.Click(x, y)
+        time.sleep(0.05)
         
         if clear:
-            pg.hotkey('command', 'a')
+            ax.HotKey('command', 'a')
             time.sleep(0.05)
-            pg.press('delete')
+            ax.KeyPress(ax.KeyCode.Delete)
         
         if caret_position == 'start':
-            pg.hotkey('command', 'left')
+            ax.HotKey('command', 'left')
             time.sleep(0.05)
         elif caret_position == 'end':
-            pg.hotkey('command', 'right')
+            ax.HotKey('command', 'right')
             time.sleep(0.05)
         
-        pg.typewrite(text,interval=0.05)
+        ax.TypeText(text)
         
         if press_enter:
             time.sleep(0.05)
-            pg.press('enter')
+            ax.KeyPress(ax.KeyCode.Return)
 
     def scroll(
         self,
@@ -821,63 +555,36 @@ class Desktop:
         direction: Literal['up', 'down', 'left', 'right'] = 'down',
         wheel_times: int = 1
     ) -> str:
-        """
-        Scroll at the specified coordinates.
-        
-        Args:
-            loc: (x, y) coordinates. If None, scroll at current position.
-            type: 'horizontal' or 'vertical'.
-            direction: Scroll direction.
-            wheel_times: Number of scroll wheel clicks.
-        
-        Returns:
-            Status message.
-        """
+        """Scroll at the specified coordinates."""
         if loc:
-            pg.moveTo(loc[0], loc[1])
-        
-        scroll_amount = wheel_times * 3  # Adjust scroll sensitivity
+            ax.MoveTo(loc[0], loc[1])
         
         if type == 'vertical':
             if direction == 'up':
-                pg.scroll(scroll_amount)
+                ax.WheelUp(clicks=wheel_times)
             else:
-                pg.scroll(-scroll_amount)
+                ax.WheelDown(clicks=wheel_times)
         else:
             if direction == 'left':
-                pg.hscroll(-scroll_amount)
+                ax.WheelLeft(clicks=wheel_times)
             else:
-                pg.hscroll(scroll_amount)
+                ax.WheelRight(clicks=wheel_times)
         
         return f"Scrolled {type} {direction}"
 
     def drag(self, loc: tuple[int, int]):
-        """
-        Drag from current position to the specified coordinates.
-        
-        Args:
-            loc: Target (x, y) coordinates.
-        """
-        pg.drag(loc[0] - pg.position()[0], loc[1] - pg.position()[1], duration=0.5)
+        """Drag from current position to the specified coordinates."""
+        current = ax.GetCursorPos()
+        ax.DragTo(current[0], current[1], loc[0], loc[1])
 
     def move(self, loc: tuple[int, int]):
-        """
-        Move the mouse cursor to the specified coordinates.
-        
-        Args:
-            loc: Target (x, y) coordinates.
-        """
-        pg.moveTo(loc[0], loc[1])
+        """Move the mouse cursor to the specified coordinates."""
+        ax.MoveTo(loc[0], loc[1])
 
     def shortcut(self, shortcut: str):
-        """
-        Execute a keyboard shortcut.
-        
-        Args:
-            shortcut: Key combination separated by '+' (e.g., 'command+c', 'command+shift+s').
-        """
+        """Execute a keyboard shortcut."""
         keys = shortcut.lower().split('+')
-        # Map common Windows and alias keys to macOS PyAutoGUI keys
+        # Map common Windows and alias keys to macOS
         key_mapping = {
             'ctrl': 'command',
             'cmd': 'command',
@@ -886,36 +593,25 @@ class Desktop:
             'alt': 'option',
             'opt': 'option',
         }
-        mapped_keys = [key_mapping.get(k, k) for k in keys]
-        pg.hotkey(*mapped_keys)
+        mapped_keys = [key_mapping.get(k.strip(), k.strip()) for k in keys]
+        ax.HotKey(*mapped_keys)
 
     def multi_select(self, press_ctrl: bool = False, locs: list[tuple[int, int]] = None):
-        """
-        Select multiple items by clicking with Command held.
-        
-        Args:
-            press_ctrl: If True, hold Command key while clicking.
-            locs: List of (x, y) coordinates to click.
-        """
+        """Select multiple items by clicking with Command held."""
         if not locs:
             return
         
         if press_ctrl:
-            pg.keyDown('command')
+            ax.KeyDown(ax.KeyCode.Command)
         
         for loc in locs:
-            pg.click(loc[0], loc[1])
+            ax.Click(loc[0], loc[1])
         
         if press_ctrl:
-            pg.keyUp('command')
+            ax.KeyUp(ax.KeyCode.Command)
 
     def multi_edit(self, locs: list[tuple[int, int, str]]):
-        """
-        Edit multiple fields.
-        
-        Args:
-            locs: List of (x, y, text) tuples.
-        """
+        """Edit multiple fields."""
         for loc in locs:
             x, y, text = loc[0], loc[1], loc[2]
             self.type(loc=(x, y), text=text, clear=True)
@@ -926,21 +622,9 @@ class Desktop:
         desktop_name: str = None,
         new_name: str = None,
     ) -> str:
-        """
-        Manage macOS virtual desktops (Spaces) via Mission Control.
-
-        Args:
-            action: 'create', 'remove', 'rename', or 'switch'.
-            desktop_name: Target space number or direction for switch,
-                          ignored for create/rename.
-            new_name: Not used (macOS does not support renaming Spaces).
-
-        Returns:
-            Status message.
-        """
+        """Manage macOS virtual desktops (Spaces) via Mission Control."""
         match action:
             case 'create':
-                # Open Mission Control via Control+Up, click the add button, then close
                 create_script = '\n'.join([
                     'tell application "System Events"',
                     '    key code 126 using {control down}',
@@ -957,14 +641,13 @@ class Desktop:
                     '    key code 53',
                     'end tell',
                 ])
-                response, status = self.execute_command(create_script, mode='osascript', timeout=15)
+                response, status = ax.ExecuteCommand(create_script, mode='osascript', timeout=15)
                 if status == 0:
                     return "Created a new Space via Mission Control."
                 return f"Error creating Space: {response}"
 
             case 'remove':
                 if not desktop_name:
-                    # Remove the currently active Space
                     remove_script = '\n'.join([
                         'tell application "System Events"',
                         '    key code 126 using {control down}',
@@ -992,7 +675,7 @@ class Desktop:
                         '    key code 53',
                         'end tell',
                     ])
-                    response, status = self.execute_command(remove_script, mode='osascript', timeout=15)
+                    response, status = ax.ExecuteCommand(remove_script, mode='osascript', timeout=15)
                     if status == 0:
                         return "Removed the current Space."
                     return f"Error removing Space: {response}"
@@ -1012,14 +695,14 @@ class Desktop:
 
                 if name in ('left', 'previous'):
                     script = 'tell application "System Events" to key code 123 using {control down}'
-                    response, status = self.execute_command(script, mode='osascript')
+                    response, status = ax.ExecuteCommand(script, mode='osascript')
                     if status == 0:
                         return "Switched to the Space on the left."
                     return f"Error switching Space: {response}"
 
                 elif name in ('right', 'next'):
                     script = 'tell application "System Events" to key code 124 using {control down}'
-                    response, status = self.execute_command(script, mode='osascript')
+                    response, status = ax.ExecuteCommand(script, mode='osascript')
                     if status == 0:
                         return "Switched to the Space on the right."
                     return f"Error switching Space: {response}"
@@ -1028,11 +711,10 @@ class Desktop:
                     space_num = int(name)
                     if space_num < 1 or space_num > 9:
                         return f"Error: Space number must be between 1 and 9. Got: {space_num}"
-                    # macOS key codes for number keys 1-9
                     key_codes = {1: 18, 2: 19, 3: 20, 4: 21, 5: 23, 6: 22, 7: 26, 8: 28, 9: 25}
                     key_code = key_codes[space_num]
                     script = f'tell application "System Events" to key code {key_code} using {{control down}}'
-                    response, status = self.execute_command(script, mode='osascript')
+                    response, status = ax.ExecuteCommand(script, mode='osascript')
                     if status == 0:
                         return f"Switched to Space {space_num}."
                     return (
@@ -1049,20 +731,11 @@ class Desktop:
                 return f"Error: Unknown action: {action}"
 
     def scrape(self, url: str) -> str:
-        """
-        Fetch content from a URL and convert to markdown.
-        
-        Args:
-            url: URL to fetch.
-        
-        Returns:
-            Content as markdown text.
-        """
+        """Fetch content from a URL and convert to markdown."""
         try:            
             response = requests.get(url, timeout=10)
             response.raise_for_status()
             html = response.text
-            # Convert HTML to markdown
             markdown = md(html, heading_style='ATX', strip=['script', 'style'])
             return markdown.strip()
         except Exception as e:
