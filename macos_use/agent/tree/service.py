@@ -10,6 +10,7 @@ from macos_use.agent.tree.views import (
     TreeState,
     TreeElementNode,
     ScrollElementNode,
+    TextElementNode,
     BoundingBox,
     Center,
 )
@@ -90,10 +91,10 @@ class Tree:
         
         return False
 
-    def get_state(self, window_name: str = '', active_pid: Optional[int] = None) -> TreeState:
+    def get_state(self, window_name: str = '', active_pid: Optional[int] = None, is_browser: bool = False) -> TreeState:
         """
         Capture the current accessibility tree state using parallel traversal.
-        Returns a TreeState with interactive and scrollable elements.
+        Returns a TreeState with interactive, scrollable, and DOM elements.
 
         Args:
             window_name: Name of the active window (used as fallback label).
@@ -102,9 +103,12 @@ class Tree:
                         provided, this is used instead of
                         NSWorkspace.frontmostApplication() which can return
                         stale data when no NSRunLoop is running.
+            is_browser: Whether the active window is a web browser.
         """
         interactive_elements: list[TreeElementNode] = []
         scrollable_elements: list[ScrollElementNode] = []
+        dom_informative_elements: list[TextElementNode] = []
+        dom_element_data: Optional[dict] = None
 
         # Get all running apps
         apps = ax.GetRunningApplications()
@@ -113,15 +117,16 @@ class Tree:
         launchpad_element, ax_dock = self._check_launchpad_and_get_dock(apps)
 
         # Prepare tasks for parallel execution
+        # Each task: (type, element, name, bounds, is_browser_flag)
         tasks = []
 
         if launchpad_element:
             logger.info("Launchpad is active - scanning only Launchpad and Dock")
             
-            tasks.append(('launchpad', launchpad_element, 'Launchpad', None))
+            tasks.append(('launchpad', launchpad_element, 'Launchpad', None, False))
             
             if ax_dock:
-                tasks.append(('dock', ax_dock, 'Dock', None))
+                tasks.append(('dock', ax_dock, 'Dock', None, False))
         else:
             # Normal mode - scan all sources
             pid = None
@@ -158,24 +163,24 @@ class Tree:
             if focused_window:
                 window_title = ax.GetAttribute(focused_window, ax.Attribute.Title) or app_name
 
-            # Task 1: Scan focused window
+            # Task 1: Scan focused window (pass is_browser for DOM detection)
             if focused_window:
                 bounds = None
                 pos = ax.GetPosition(focused_window)
                 size = ax.GetSize(focused_window)
                 if pos and size:
                     bounds = BoundingBox.from_position_size(pos[0], pos[1], size[0], size[1])
-                tasks.append(('window', focused_window, window_title, bounds))
+                tasks.append(('window', focused_window, window_title, bounds, is_browser))
 
             # Task 2: Scan Dock (skip if window is fullscreen/maximized)
             is_fullscreen = self.is_window_fullscreen(focused_window)
             if ax_dock and not is_fullscreen:
-                tasks.append(('dock', ax_dock, 'Dock', None))
+                tasks.append(('dock', ax_dock, 'Dock', None, False))
 
             # Task 3: Scan Menu Bar of frontmost app
             menu_bar = ax.GetAttribute(ax_app, ax.Attribute.MenuBar)
             if menu_bar:
-                tasks.append(('menubar', menu_bar, 'MenuBar', None))
+                tasks.append(('menubar', menu_bar, 'MenuBar', None, False))
 
             # Task 4: Scan Control Center (WiFi, Bluetooth, etc.)
             cc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.controlcenter"), None)
@@ -185,11 +190,11 @@ class Tree:
                 cc_windows = ax.GetAttribute(ax_cc, ax.Attribute.Windows)
                 if cc_windows and len(cc_windows) > 0:
                     for cc_window in cc_windows:
-                        tasks.append(('control_center_window', cc_window, 'Control Center', None))
+                        tasks.append(('control_center_window', cc_window, 'Control Center', None, False))
                 
                 cc_extras = ax.GetAttribute(ax_cc, ax.Attribute.ExtrasMenuBar)
                 if cc_extras:
-                    tasks.append(('control_center', cc_extras, 'Control Center', None))
+                    tasks.append(('control_center', cc_extras, 'Control Center', None, False))
                 
                 cc_children = ax.GetChildren(ax_cc)
                 for child in cc_children:
@@ -197,7 +202,7 @@ class Tree:
                     if child_role in (ax.Role.Popover, ax.Role.Group, ax.Role.Sheet):
                         is_hidden = ax.GetAttribute(child, ax.Attribute.Hidden)
                         if is_hidden is not True:
-                            tasks.append(('control_center_popover', child, 'Control Center', None))
+                            tasks.append(('control_center_popover', child, 'Control Center', None, False))
 
             # Task 4.5: Scan Notification Center (Date/Time, Widgets)
             nc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.notificationcenterui"), None)
@@ -209,7 +214,7 @@ class Tree:
                     for nc_window in nc_windows:
                         is_hidden = ax.GetAttribute(nc_window, ax.Attribute.Hidden)
                         if is_hidden is not True:
-                            tasks.append(('notification_center', nc_window, 'Notification Center', None))
+                            tasks.append(('notification_center', nc_window, 'Notification Center', None, False))
                 
                 nc_children = ax.GetChildren(ax_nc)
                 for child in nc_children:
@@ -217,7 +222,7 @@ class Tree:
                     if child_role in (ax.Role.ScrollArea, ax.Role.Group, ax.Role.List):
                         is_hidden = ax.GetAttribute(child, ax.Attribute.Hidden)
                         if is_hidden is not True:
-                            tasks.append(('notification_center_child', child, 'Notification Center', None))
+                            tasks.append(('notification_center_child', child, 'Notification Center', None, False))
 
             # Task 5: Scan SystemUIServer (battery, volume, etc.)
             ss_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.systemuiserver"), None)
@@ -225,7 +230,7 @@ class Tree:
                 ax_ss = ax.ControlFromPID(ss_app.processIdentifier())
                 ss_menu = ax.GetAttribute(ax_ss, ax.Attribute.MenuBar)
                 if ss_menu:
-                    tasks.append(('system_ui', ss_menu, 'SystemUI', None))
+                    tasks.append(('system_ui', ss_menu, 'SystemUI', None, False))
 
             # Task 6: Scan Spotlight
             sl_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.Spotlight"), None)
@@ -233,7 +238,7 @@ class Tree:
                 ax_sl = ax.ControlFromPID(sl_app.processIdentifier())
                 sl_extras = ax.GetAttribute(ax_sl, ax.Attribute.ExtrasMenuBar)
                 if sl_extras:
-                    tasks.append(('spotlight', sl_extras, 'Spotlight', None))
+                    tasks.append(('spotlight', sl_extras, 'Spotlight', None, False))
 
             # Task 7: Scan Desktop Icons (Finder) - only if no foreground window
             if not focused_window:
@@ -246,51 +251,78 @@ class Tree:
                             role = ax.GetAttribute(child, ax.Attribute.Role)
                             desc = ax.GetAttribute(child, ax.Attribute.Description)
                             if role == ax.Role.ScrollArea and desc == 'desktop':
-                                tasks.append(('desktop', child, 'Desktop', None))
+                                tasks.append(('desktop', child, 'Desktop', None, False))
                                 break
 
 
         # Execute traversal in parallel
         with ThreadPoolExecutor() as executor:
             futures = [
-                executor.submit(self.get_appwise_nodes, element, name, bounds)
-                for _, element, name, bounds in tasks
+                executor.submit(self.get_appwise_nodes, element, name, bounds, is_browser_flag)
+                for _, element, name, bounds, is_browser_flag in tasks
             ]
 
             for future in as_completed(futures):
                 try:
-                    elements, scrollables = future.result()
+                    elements, scrollables, dom_info_nodes, dom_data = future.result()
                     with self._lock:
                         interactive_elements.extend(elements)
                         scrollable_elements.extend(scrollables)
+                        if dom_info_nodes:
+                            dom_informative_elements.extend(dom_info_nodes)
+                        if dom_data and dom_data.get('element') is not None:
+                            dom_element_data = dom_data
                 except Exception as e:
                     logger.error(f"Thread error: {e}")
+
+        # Build DOM scroll node if a web area was found
+        dom_node = None
+        if dom_element_data:
+            dom_node = self._build_dom_node(dom_element_data)
 
         return TreeState(
             interactive_nodes=interactive_elements,
             scrollable_nodes=scrollable_elements,
+            dom_node=dom_node,
+            dom_informative_nodes=dom_informative_elements,
         )
 
     def get_appwise_nodes(
         self, 
         element, 
         window_name: str,
-        root_bounds: Optional[BoundingBox] = None
-    ) -> tuple[list[TreeElementNode], list[ScrollElementNode]]:
+        root_bounds: Optional[BoundingBox] = None,
+        is_browser: bool = False
+    ) -> tuple[list[TreeElementNode], list[ScrollElementNode], list[TextElementNode], dict]:
         """
         Thread-safe scan for interactive elements.
         Returns collected elements instead of modifying shared state.
+        Also returns DOM informative nodes and DOM element data for browsers.
         """
         interactive_elements: list[TreeElementNode] = []
         scrollable_elements: list[ScrollElementNode] = []
+        dom_interactive_elements: list[TreeElementNode] = []
+        dom_informative_elements: list[TextElementNode] = []
+        dom_info: dict = {}
         
         self.tree_traversal(
             element, window_name, set(),
             interactive_elements, scrollable_elements,
-            root_bounds
+            root_bounds,
+            is_browser=is_browser,
+            is_dom=False,
+            dom_interactive_elements=dom_interactive_elements,
+            dom_informative_elements=dom_informative_elements,
+            dom_info=dom_info,
         )
         
-        return interactive_elements, scrollable_elements
+        # Merge DOM interactive elements into the main list
+        if dom_interactive_elements:
+            interactive_elements.extend(dom_interactive_elements)
+            logger.debug(f"[Tree] DOM interactive nodes: {len(dom_interactive_elements)}")
+            logger.debug(f"[Tree] DOM informative nodes: {len(dom_informative_elements)}")
+        
+        return interactive_elements, scrollable_elements, dom_informative_elements, dom_info
 
     def tree_traversal(
         self,
@@ -299,11 +331,20 @@ class Tree:
         visited: set,
         interactive_elements: list[TreeElementNode],
         scrollable_elements: list[ScrollElementNode],
-        root_bounds: Optional[BoundingBox] = None
+        root_bounds: Optional[BoundingBox] = None,
+        is_browser: bool = False,
+        is_dom: bool = False,
+        dom_interactive_elements: Optional[list[TreeElementNode]] = None,
+        dom_informative_elements: Optional[list[TextElementNode]] = None,
+        dom_info: Optional[dict] = None,
     ):
         """
         Recursive scan for interactive elements.
         Collects elements into provided lists.
+
+        When is_browser=True and a WebArea element is encountered, the traversal
+        switches to DOM mode (is_dom=True). In DOM mode, interactive elements are
+        collected in dom_interactive_elements and text content in dom_informative_elements.
         """
 
         try:
@@ -340,7 +381,8 @@ class Tree:
                 self.tree_traversal(
                     child, window_name, visited,
                     interactive_elements, scrollable_elements,
-                    root_bounds
+                    root_bounds, is_browser, is_dom,
+                    dom_interactive_elements, dom_informative_elements, dom_info
                 )
             return
 
@@ -381,7 +423,9 @@ class Tree:
                 for child in ax.GetChildren(element):
                     self.tree_traversal(
                         child, window_name, visited,
-                        interactive_elements, scrollable_elements
+                        interactive_elements, scrollable_elements,
+                        root_bounds, is_browser, is_dom,
+                        dom_interactive_elements, dom_informative_elements, dom_info
                     )
                 return
             
@@ -407,8 +451,39 @@ class Tree:
                 element_type=role_description or '',
                 actions=list(actions) if actions else [],
             )
-            interactive_elements.append(node)
+
+            # In DOM mode, add to DOM interactive list; otherwise to regular list
+            if is_dom and dom_interactive_elements is not None:
+                dom_interactive_elements.append(node)
+                self._dom_correction(element, dom_interactive_elements, window_name, bbox)
+            else:
+                interactive_elements.append(node)
             
+            return
+
+        # Capture informative text nodes inside the DOM
+        if is_dom and dom_informative_elements is not None:
+            if role == ax.Role.StaticText:
+                text = title or value or description or ''
+                if isinstance(text, str) and text.strip():
+                    dom_informative_elements.append(TextElementNode(text=text.strip()))
+
+        # Check if this element is a WebArea (DOM entry point for browsers)
+        if is_browser and not is_dom and role == ax.Role.WebArea:
+            # Record DOM element info
+            if dom_info is not None:
+                dom_info['element'] = element
+                dom_info['bounding_box'] = bbox
+            # Enter DOM subtree — recurse with is_dom=True, using WebArea bbox as root_bounds
+            for child in ax.GetChildren(element):
+                self.tree_traversal(
+                    child, window_name, visited,
+                    interactive_elements, scrollable_elements,
+                    root_bounds=bbox, is_browser=True, is_dom=True,
+                    dom_interactive_elements=dom_interactive_elements,
+                    dom_informative_elements=dom_informative_elements,
+                    dom_info=dom_info,
+                )
             return
 
         # Recurse into children
@@ -416,8 +491,108 @@ class Tree:
             self.tree_traversal(
                 child, window_name, visited,
                 interactive_elements, scrollable_elements,
-                root_bounds
+                root_bounds, is_browser, is_dom,
+                dom_interactive_elements, dom_informative_elements, dom_info
             )
+
+    def _dom_correction(
+        self,
+        element,
+        dom_interactive_elements: list[TreeElementNode],
+        window_name: str,
+        dom_bbox: BoundingBox,
+    ):
+        """
+        Apply DOM-specific corrections for browser accessibility tree quirks.
+        Handles common patterns like groups wrapping links, list items with links, etc.
+        """
+        if not dom_interactive_elements:
+            return
+
+        try:
+            children = ax.GetChildren(element)
+            if not children:
+                return
+
+            role = ax.GetAttribute(element, ax.Attribute.Role)
+
+            # Pattern 1: Group containing a single Link child — the group was already
+            # added as interactive, but the link inside is the real target. Pop the
+            # group and let the link be discovered on its own in the next recursion.
+            if role == ax.Role.Group:
+                first_child = children[0] if len(children) == 1 else None
+                if first_child:
+                    child_role = ax.GetAttribute(first_child, ax.Attribute.Role)
+                    if child_role == ax.Role.Link:
+                        dom_interactive_elements.pop()
+                        return
+
+            # Pattern 2: List/Row containing a single Link child — similar to above.
+            if role in (ax.Role.List, ax.Role.Row):
+                first_child = children[0] if len(children) == 1 else None
+                if first_child:
+                    child_role = ax.GetAttribute(first_child, ax.Attribute.Role)
+                    if child_role == ax.Role.Link:
+                        dom_interactive_elements.pop()
+                        return
+
+        except Exception:
+            pass
+
+    def _build_dom_node(self, dom_element_data: dict) -> Optional[ScrollElementNode]:
+        """
+        Build a ScrollElementNode representing the DOM (web content area) from
+        the captured WebArea element data. Reads scroll state from the WebArea's
+        parent ScrollArea or the WebArea itself.
+        """
+        try:
+            element = dom_element_data.get('element')
+            bbox = dom_element_data.get('bounding_box')
+            if not element or not bbox:
+                return None
+
+            h_scrollable = False
+            v_scrollable = False
+            h_percent = 0.0
+            v_percent = 0.0
+
+            # Try to get scroll state from the WebArea's parent ScrollArea
+            parent = ax.GetAttribute(element, ax.Attribute.Parent)
+            scroll_source = None
+            if parent:
+                parent_role = ax.GetAttribute(parent, ax.Attribute.Role)
+                if parent_role == ax.Role.ScrollArea:
+                    scroll_source = parent
+
+            # Fall back to the WebArea element itself
+            if not scroll_source:
+                scroll_source = element
+
+            h_scrollbar = ax.GetAttribute(scroll_source, ax.Attribute.HorizontalScrollBar)
+            v_scrollbar = ax.GetAttribute(scroll_source, ax.Attribute.VerticalScrollBar)
+
+            h_scrollable = h_scrollbar is not None
+            v_scrollable = v_scrollbar is not None
+
+            if h_scrollable:
+                h_percent = self._get_scrollbar_value(h_scrollbar) * 100.0
+            if v_scrollable:
+                v_percent = self._get_scrollbar_value(v_scrollbar) * 100.0
+
+            return ScrollElementNode(
+                name='DOM',
+                role=ax.Role.WebArea,
+                window_name='DOM',
+                bounding_box=bbox,
+                center=bbox.get_center(),
+                horizontal_scrollable=h_scrollable,
+                horizontal_scroll_percent=round(h_percent, 1),
+                vertical_scrollable=v_scrollable,
+                vertical_scroll_percent=round(v_percent, 1),
+            )
+        except Exception as e:
+            logger.debug(f"[Tree] Failed to build DOM node: {e}")
+            return None
 
     def _get_scrollbar_value(self, scrollbar) -> float:
         """

@@ -10,6 +10,7 @@ from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_I
 from macos_use.agent.tree.views import BoundingBox
 from markdownify import markdownify as md
 from macos_use.agent.tree.service import Tree
+from contextlib import contextmanager
 from typing import Literal, Optional
 from PIL import Image
 from io import BytesIO
@@ -215,7 +216,8 @@ class Desktop:
         
         active_pid = active_window.pid if active_window else None
         window_name = active_window.name if active_window else ''
-        tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid)
+        is_browser = active_window.is_browser if active_window else False
+        tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid, is_browser=is_browser)
         
         screenshot = None
         if use_vision:
@@ -729,6 +731,36 @@ class Desktop:
 
             case _:
                 return f"Error: Unknown action: {action}"
+
+    @contextmanager
+    def auto_minimize(self):
+        """
+        Context manager that minimizes the foreground window on entry
+        and restores it on exit. Used to keep the agent's terminal/interface
+        out of the way while interacting with other windows.
+        """
+        window_element = None
+        try:
+            pid = ax.GetForegroundWindowPID()
+            if pid:
+                app_element = ax.ControlFromPID(pid)
+                if app_element:
+                    control = ax.Control(element=app_element)
+                    # Try focused window first, then main window
+                    window_control = control.FocusedWindow or control.MainWindow
+                    if window_control and not window_control.IsMinimized:
+                        window_element = window_control.Element
+                        ax.SetAttribute(window_element, ax.Attribute.Minimized, True)
+                        logger.info(f"[Desktop] Auto-minimized foreground window (PID: {pid})")
+                        time.sleep(0.3)  # Brief pause for the animation
+            yield
+        finally:
+            if window_element:
+                try:
+                    ax.SetAttribute(window_element, ax.Attribute.Minimized, False)
+                    logger.info(f"[Desktop] Restored minimized window")
+                except Exception as e:
+                    logger.warning(f"[Desktop] Failed to restore window: {e}")
 
     def scrape(self, url: str) -> str:
         """Fetch content from a URL and convert to markdown."""

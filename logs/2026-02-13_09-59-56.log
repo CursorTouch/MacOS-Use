@@ -1,0 +1,17 @@
+09:59:56 [INFO] [Agent] 🔍 Query: check the weather in singapore
+09:59:56 [DEBUG] [Agent] 💻 Environment: macOS 26.2
+09:59:56 [DEBUG] [Agent] ⚙️  System Info: Resolution=1440x900, DPI=1.0x, Language=
+    "en-IN"
+
+09:59:56 [WARNING] [Desktop] Failed to restore window: 'Control' object has no attribute 'Unminimize'
+09:59:56 [ERROR] [Agent] Unhandled exception: 'Control' object has no attribute 'Minimize'
+Traceback (most recent call last):
+  File "/Users/jeomon/Downloads/Macos-Use/macos_use/agent/service.py", line 332, in invoke
+    with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/jeomon/.local/share/uv/python/cpython-3.13.12-macos-aarch64-none/lib/python3.13/contextlib.py", line 141, in __enter__
+    return next(self.gen)
+  File "/Users/jeomon/Downloads/Macos-Use/macos_use/agent/desktop/service.py", line 751, in auto_minimize
+    window_control.Minimize()
+    ^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Control' object has no attribute 'Minimize'. Did you mean: 'IsMinimized'?

@@ -667,19 +667,21 @@ def KeyDown(key_code: int, flags: int = 0) -> None:
 
     Args:
         key_code: Virtual key code from KeyCode class.
-        flags: Modifier flags from EventFlag class.
+        flags: Modifier flags from EventFlag class (0 = no modifiers).
     """
     event = CGEventCreateKeyboardEvent(None, key_code, True)
-    if flags:
-        CGEventSetFlags(event, flags)
+    # Always set flags explicitly — CGEventCreateKeyboardEvent(None, ...)
+    # inherits the current system modifier state, so we must override it
+    # even when flags=0 to prevent stale modifiers from leaking through.
+    CGEventSetFlags(event, flags)
     CGEventPost(kCGHIDEventTap, event)
 
 
 def KeyUp(key_code: int, flags: int = 0) -> None:
     """Release a key."""
     event = CGEventCreateKeyboardEvent(None, key_code, False)
-    if flags:
-        CGEventSetFlags(event, flags)
+    # Always clear/set flags explicitly to prevent modifier leakage.
+    CGEventSetFlags(event, flags)
     CGEventPost(kCGHIDEventTap, event)
 
 
@@ -728,6 +730,24 @@ def HotKey(*keys: str, waitTime: float = 0.05) -> None:
                 KeyUp(KEY_NAME_TO_CODE[key_lower])
 
 
+def _release_modifiers() -> None:
+    """
+    Release all modifier keys to ensure a clean keyboard state.
+
+    This prevents stale modifier flags (e.g. from a preceding HotKey call)
+    from leaking into subsequent key events. Sends explicit key-up events
+    for Command, Shift, Option, and Control on both left and right sides.
+    """
+    modifier_keycodes = [
+        KeyCode.Command, KeyCode.Shift, KeyCode.Option, KeyCode.Control,
+        KeyCode.RightCommand, KeyCode.RightShift, KeyCode.RightOption, KeyCode.RightControl,
+    ]
+    for kc in modifier_keycodes:
+        event = CGEventCreateKeyboardEvent(None, kc, False)
+        CGEventSetFlags(event, 0)
+        CGEventPost(kCGHIDEventTap, event)
+
+
 def TypeText(text: str, interval: float = 0.01) -> None:
     """
     Type a string of text using native CGEvent keyboard events.
@@ -747,6 +767,13 @@ def TypeText(text: str, interval: float = 0.01) -> None:
     """
     if not text:
         return
+
+    # Release all modifier keys before typing to ensure no stale
+    # Command/Shift/Option/Control state leaks into the key events.
+    # This is critical after HotKey calls (e.g. Cmd+A for select-all)
+    # which may leave the system thinking a modifier is still held.
+    _release_modifiers()
+    time.sleep(0.02)
 
     for char in text:
         _type_character(char, interval)
@@ -799,12 +826,16 @@ def _type_unicode_char(char: str) -> None:
     utf16_length = len(utf16_bytes) // 2  # Number of UniChar code units
 
     # Key down event with the Unicode string attached
+    # Use key code 0 as a placeholder — the actual character comes from
+    # CGEventKeyboardSetUnicodeString, not from the virtual key code.
     event_down = CGEventCreateKeyboardEvent(None, 0, True)
+    CGEventSetFlags(event_down, 0)  # Explicitly clear all modifier flags
     CGEventKeyboardSetUnicodeString(event_down, utf16_length, char)
     CGEventPost(kCGHIDEventTap, event_down)
 
-    # Key up event (no Unicode string needed, just completes the pair)
+    # Key up event (completes the keystroke pair)
     event_up = CGEventCreateKeyboardEvent(None, 0, False)
+    CGEventSetFlags(event_up, 0)  # Explicitly clear all modifier flags
     CGEventPost(kCGHIDEventTap, event_up)
 
 
