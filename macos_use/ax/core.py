@@ -22,6 +22,7 @@ from Quartz import (
     CGEventPost,
     CGEventSetFlags,
     CGEventSetIntegerValueField,
+    CGEventKeyboardSetUnicodeString,
     kCGHIDEventTap,
     kCGEventMouseMoved,
     kCGEventLeftMouseDown,
@@ -727,39 +728,44 @@ def HotKey(*keys: str, waitTime: float = 0.05) -> None:
                 KeyUp(KEY_NAME_TO_CODE[key_lower])
 
 
-def TypeText(text: str, interval: float = 0.02) -> None:
+def TypeText(text: str, interval: float = 0.01) -> None:
     """
-    Type a string of text using keyboard events.
-    Uses the clipboard (pbcopy + Cmd+V) for reliability with Unicode and
-    keyboard layout independence.
+    Type a string of text using native CGEvent keyboard events.
+    Uses CGEventKeyboardSetUnicodeString for natural text input that
+    supports all Unicode scripts (Hindi, Chinese, Arabic, etc.)
+    without touching the system clipboard.
+
+    Each character is typed as an individual key-down/key-up pair,
+    simulating real keystrokes. For ASCII characters with known key
+    codes, real virtual key events are generated. For all other
+    characters (Unicode), CGEventKeyboardSetUnicodeString is used to
+    inject the character directly into the keyboard event stream.
 
     Args:
         text: The text to type.
-        interval: Delay between characters (only used for non-clipboard fallback).
+        interval: Delay between keystrokes in seconds.
     """
     if not text:
         return
 
-    try:
-        # Use clipboard for reliable Unicode text input
-        process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
-        process.communicate(text.encode('utf-8'))
-        time.sleep(0.05)
-        HotKey('command', 'v')
-        time.sleep(0.05)
-    except Exception:
-        # Fallback: type character by character using CGEvent
-        for char in text:
-            _type_character(char, interval)
+    for char in text:
+        _type_character(char, interval)
 
 
-def _type_character(char: str, interval: float = 0.02) -> None:
-    """Type a single character using CGEvent keyboard simulation."""
+def _type_character(char: str, interval: float = 0.01) -> None:
+    """
+    Type a single character using CGEvent keyboard simulation.
+
+    For ASCII characters with known virtual key codes, generates real
+    key press events (most natural for applications). For everything
+    else, uses CGEventKeyboardSetUnicodeString to inject the character
+    natively without clipboard involvement.
+    """
     key_lower = char.lower()
     if key_lower in KEY_NAME_TO_CODE:
         key_code = KEY_NAME_TO_CODE[key_lower]
         flags = 0
-        # Apply shift for uppercase
+        # Apply shift for uppercase letters
         if char.isupper():
             flags = kCGEventFlagMaskShift
         KeyPress(key_code, flags, interval)
@@ -770,20 +776,36 @@ def _type_character(char: str, interval: float = 0.02) -> None:
     elif char == '\t':
         KeyPress(KeyCode.Tab, 0, interval)
     else:
-        # For characters not in our keymap, use the Unicode input method
+        # Unicode character — use CGEventKeyboardSetUnicodeString
         _type_unicode_char(char)
+        time.sleep(interval)
 
 
 def _type_unicode_char(char: str) -> None:
-    """Type a Unicode character using the clipboard method."""
-    try:
-        process = subprocess.Popen(['pbcopy'], stdin=subprocess.PIPE)
-        process.communicate(char.encode('utf-8'))
-        time.sleep(0.02)
-        HotKey('command', 'v')
-        time.sleep(0.02)
-    except Exception:
-        pass
+    """
+    Type a Unicode character using CGEventKeyboardSetUnicodeString.
+
+    This injects the character directly into the keyboard event stream
+    without touching the clipboard. Works with any Unicode script:
+    Devanagari (Hindi), CJK (Chinese/Japanese/Korean), Arabic, Cyrillic,
+    emoji, and all other Unicode characters.
+
+    The character is encoded as UTF-16 (macOS native UniChar format) and
+    attached to a CGEvent keyboard event pair (key-down + key-up).
+    """
+    # Encode to UTF-16LE to get the UniChar representation
+    # Each UniChar is 2 bytes; surrogate pairs (e.g. emoji) produce 2 UniChars
+    utf16_bytes = char.encode('utf-16-le')
+    utf16_length = len(utf16_bytes) // 2  # Number of UniChar code units
+
+    # Key down event with the Unicode string attached
+    event_down = CGEventCreateKeyboardEvent(None, 0, True)
+    CGEventKeyboardSetUnicodeString(event_down, utf16_length, char)
+    CGEventPost(kCGHIDEventTap, event_down)
+
+    # Key up event (no Unicode string needed, just completes the pair)
+    event_up = CGEventCreateKeyboardEvent(None, 0, False)
+    CGEventPost(kCGHIDEventTap, event_up)
 
 
 # =============================================================================
