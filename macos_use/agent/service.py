@@ -1,4 +1,5 @@
 from macos_use.messages import SystemMessage, HumanMessage, AIMessage, ImageMessage, ToolMessage
+from macos_use.agent.desktop.config import MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT
 from macos_use.agent.tools import BUILTIN_TOOLS, EXPERIMENTAL_TOOLS
 from macos_use.agent.views import AgentResult, AgentState
 from macos_use.telemetry.service import ProductTelemetry
@@ -19,8 +20,9 @@ import logging
 import time
 
 logger = logging.getLogger("macos_use")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)  # Allow all levels; handlers will filter
 handler = logging.StreamHandler()
+handler.setLevel(logging.INFO)  # Console stays clean with INFO
 formatter = logging.Formatter('[%(levelname)s] %(message)s')
 handler.setFormatter(formatter)
 logger.addHandler(handler)
@@ -46,7 +48,6 @@ class Agent(BaseAgent):
         browser: Browser = Browser.EDGE,
         use_annotation: bool = False,
         use_accessibility: bool = True,
-        secrets: dict[str, str] = {},
         llm: BaseChatLLM = None,
         max_consecutive_failures: int = 3,
         max_steps: int = 25,
@@ -68,7 +69,6 @@ class Agent(BaseAgent):
             use_annotation: Whether to overlay UI element annotations on screenshots before
                 providing to the LLM. Defaults to False.
             use_accessibility: Whether to use the accessibility tree. Defaults to True.
-            secrets: A dictionary of secret key-value pairs accessible to the agent.
             llm: The Large Language Model instance used for decision making.
             max_consecutive_failures: Maximum number of consecutive failures before giving up.
             max_steps: Maximum number of steps allowed in the agent's execution.
@@ -77,10 +77,9 @@ class Agent(BaseAgent):
                 proceeds. Defaults to False.
             experimental: Whether to include experimental tools. Defaults to False.
         """
-        self.name = "MacOS-Use"
+        self.name = "MacOS Use"
         self.description = "An agent that can interact with GUI elements on macOS"
         self.mode = mode
-        self.secrets = secrets
         self.registry = Registry(
             BUILTIN_TOOLS + EXPERIMENTAL_TOOLS if experimental else BUILTIN_TOOLS
         )
@@ -92,9 +91,8 @@ class Agent(BaseAgent):
         if use_annotation and not use_accessibility:
             logger.warning("use_accessibility is set to True if use_annotation is True.")
         self.desktop = Desktop(
-            use_vision=True if use_annotation else use_vision,
             use_annotation=use_annotation,
-            use_accessibility=True if use_annotation else use_accessibility,
+            use_vision=use_vision,
         )
         self.state = AgentState(
             max_consecutive_failures=max_consecutive_failures,
@@ -124,25 +122,45 @@ class Agent(BaseAgent):
 
     @property
     def state_message(self) -> HumanMessage | ImageMessage:
-        desktop_state = self.desktop.get_state()
+        # Calculate scale factor to cap resolution at 1080p
+        screen_size = self.desktop.get_screen_size()
+        scale_width = MAX_IMAGE_WIDTH / screen_size.width if screen_size.width > MAX_IMAGE_WIDTH else 1.0
+        scale_height = MAX_IMAGE_HEIGHT / screen_size.height if screen_size.height > MAX_IMAGE_HEIGHT else 1.0
+        scale = min(scale_width, scale_height)
+
+        desktop_state = self.desktop.get_state(scale=scale)
+        
+        # Log rich state info
+        logger.debug(f"[Agent] 🖥️  Desktop State (Step {self.state.step + 1})")
+        logger.debug(f"Active Window: {desktop_state.active_window.name if desktop_state.active_window else 'None'}")
+        logger.debug(f"Windows Found:\n{desktop_state.windows_to_string()}")
+        
+        if self.desktop.use_accessibility and desktop_state.tree_state:
+            num_elements = len(desktop_state.tree_state.interactive_nodes)
+            logger.debug(f"Interactive Elements Found: {num_elements}")
+            # Full element tree is logged to DEBUG (file only)
+            logger.debug(f"Full Accessibility Tree:\n{desktop_state.tree_state.interactive_elements_to_string()}")
+
         content = self.prompt.human(
             query=self.state.task,
             step=self.state.step,
             max_steps=self.state.max_steps,
             desktop=self.desktop,
         )
+        # Log the final markdown prompt sent to LLM for debugging purposes
+        logger.debug(f"Final Prompt Content:\n{content}")
         if self.desktop.use_vision and desktop_state.screenshot:
             image = desktop_state.screenshot
             return ImageMessage(image=image, content=content)
         return HumanMessage(content=content)
 
-    def reason(self) -> ToolMessage:
+    def reason(self) -> ToolMessage | AIMessage:
         """Call the LLM and return the response message.
 
         Retries up to max_consecutive_failures times with exponential backoff on failure.
 
         Returns:
-            The LLM response as a ToolMessage.
+            The LLM response as a ToolMessage or AIMessage.
 
         Raises:
             ValueError: If the LLM returns an unexpected response type.
@@ -161,19 +179,14 @@ class Agent(BaseAgent):
                         f"LLM returned None content (provider: {self.llm.provider}, "
                         f"model: {self.llm.model_name})"
                     )
-                elif isinstance(content, AIMessage):
-                    feedback_message=HumanMessage(content="Response rejected, please use the `done_tool` to respond to the user.")
-                    self.state.error_messages.extend([content,feedback_message])
-                    continue
-                elif isinstance(content, ToolMessage):
-                    self.state.error_messages.clear()
-                    return content
-                else:       
+
+                if not isinstance(content, (ToolMessage, AIMessage)):
                     raise ValueError(
                         f"LLM returned unexpected content type: {type(content).__name__}. "
                         f"Expected ToolMessage or AIMessage."
                     )
-
+                self.state.error_messages.clear()
+                return content
             except Exception as e:
                 last_error = e
                 if attempt < max_attempts - 1:
@@ -191,12 +204,7 @@ class Agent(BaseAgent):
                         f"All {max_attempts} attempts exhausted."
                     )
 
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError(
-            f"LLM failed to return a tool call after {max_attempts} attempts "
-            f"(provider: {self.llm.provider}, model: {self.llm.model_name})"
-        )
+        raise last_error
 
     def act(self, tool_name: str, tool_params: dict) -> ToolResult:
         tool_result = self.registry.execute(
@@ -221,10 +229,8 @@ class Agent(BaseAgent):
 
         for step in range(self.state.max_steps):
             self.state.step = step
-            logger.info(f"[Agent] 👁️ Observing: Scanning desktop...")
             self.state.messages.append(self.state_message)
 
-            logger.info(f"[Agent] 🧠 Thinking: Reasoning...")
             try:
                 message = self.reason()
             except Exception as e:
@@ -234,63 +240,71 @@ class Agent(BaseAgent):
                     error=f"Agent failed after exhausting retries: {e}",
                 )
 
-            self.state.messages.pop()  # Remove the state message from the messages list
+            if isinstance(message, ToolMessage):
+                self.state.messages.pop()  # Remove the state message from the messages list
 
-            tool_name = message.name
-            tool_params = message.params
+                tool_name = message.name
+                tool_params = message.params
 
-            evaluate = tool_params.get('evaluate', 'neutral')
-            logger.info(f"[Agent] 📊 Evaluate: {evaluate}")
-            logger.info(f"[Agent] 🧠 Thinking: {tool_params.get('thought', '')}")
+                evaluate = tool_params.get('evaluate', 'neutral')
+                logger.info(f"[Agent] 📊 Evaluate: {evaluate}")
+                logger.info(f"[Agent] 🧠 Thinking: {tool_params.get('thought', '')}")
 
-            if tool_name != "done_tool":
-                formatted_params = [
-                    f"{key}={value}"
-                    for key, value in tool_params.items()
-                    if key not in ["thought", "evaluate"]
-                ]
-                logger.info(
-                    f"[Agent] 🛠️ Tool Call: {tool_name}({', '.join(formatted_params)})"
-                )
+                if tool_name != "done_tool":
+                    formatted_params = [
+                        f"{key}={value}"
+                        for key, value in tool_params.items()
+                        if key not in ["thought", "evaluate"]
+                    ]
+                    logger.info(
+                        f"[Agent] 🛠️ Tool Call: {tool_name}({', '.join(formatted_params)})"
+                    )
 
-            tool_result = self.act(tool_name=tool_name, tool_params=tool_params)
-            if tool_result.is_success:
-                content = tool_result.content
-                message.content = content
+                tool_result = self.act(tool_name=tool_name, tool_params=tool_params)
+                if tool_result.is_success:
+                    content = tool_result.content
+                    message.content = content
+                    self.state.messages.append(message)
+                else:
+                    content=tool_result.error
+                    message.content = content
+                    self.state.error_messages.append(message)
+                
+
+                # Track consecutive failures
+                if not tool_result.is_success:
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"[Agent] Tool '{tool_name}' failed "
+                        f"({consecutive_failures}/{self.state.max_consecutive_failures}): {content}"
+                    )
+                    if consecutive_failures >= self.state.max_consecutive_failures:
+                        logger.error(
+                            f"[Agent] Aborting: {self.state.max_consecutive_failures} "
+                            f"consecutive tool failures reached."
+                        )
+                        return AgentResult(
+                            is_done=False,
+                            error=(
+                                f"Agent aborted after {self.state.max_consecutive_failures} "
+                                f"consecutive tool failures. Last error: {content}"
+                            ),
+                        )
+                else:
+                    consecutive_failures = 0
+
+                if tool_name != "done_tool":
+                    logger.info(f"[Agent] 📝 Tool Result: {content}")
+
+                if tool_name == "done_tool":
+                    logger.info(f"[Agent] 📝 Final Answer: {content}")
+                    return self.result(content=content, is_done=True)
+
+            if isinstance(message, AIMessage):
                 self.state.messages.append(message)
-            else:
-                content = tool_result.error
-                message.content = content
-                self.state.error_messages.append(message)
-
-            # Track consecutive failures
-            if not tool_result.is_success:
-                consecutive_failures += 1
-                logger.warning(
-                    f"[Agent] Tool '{tool_name}' failed "
-                    f"({consecutive_failures}/{self.state.max_consecutive_failures}): {content}"
-                )
-                if consecutive_failures >= self.state.max_consecutive_failures:
-                    logger.error(
-                        f"[Agent] Aborting: {self.state.max_consecutive_failures} "
-                        f"consecutive tool failures reached."
-                    )
-                    return AgentResult(
-                        is_done=False,
-                        error=(
-                            f"Agent aborted after {self.state.max_consecutive_failures} "
-                            f"consecutive tool failures. Last error: {content}"
-                        ),
-                    )
-            else:
-                consecutive_failures = 0
-
-            if tool_name == "done_tool":
+                content = message.content
                 logger.info(f"[Agent] 📝 Final Answer: {content}")
                 return self.result(content=content, is_done=True)
-
-            if tool_name != "done_tool":
-                logger.info(f"[Agent] 📝 Tool Response: {content}")
 
         logger.warning(
             f"[Agent] Max steps ({self.state.max_steps}) reached without completing the task."
@@ -306,7 +320,14 @@ class Agent(BaseAgent):
         file_handler = _create_file_logger() if self.log_to_file else None
         if file_handler:
             logger.addHandler(file_handler)
+        result = None
         logger.info(f"[Agent] 🔍 Query: {query}")
+        
+        # Log detailed system environment at the start
+        width, height = self.desktop.get_screen_size().width, self.desktop.get_screen_size().height
+        logger.debug(f"[Agent] 💻 Environment: {self.desktop.get_macos_version()}")
+        logger.debug(f"[Agent] ⚙️  System Info: Resolution={width}x{height}, DPI={self.desktop.get_dpi_scaling()}, Language={self.desktop.get_default_language()}")
+        
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
                 self.watchdog.set_focus_callback(self.desktop.tree.on_focus_changed)
@@ -316,7 +337,6 @@ class Agent(BaseAgent):
                 logger.info(f"[Agent] Task completed successfully")
             else:
                 logger.warning(f"[Agent] Task ended with error: {result.error}")
-            return result
         except Exception as e:
             logger.error(f"[Agent] Unhandled exception: {e}", exc_info=True)
             raise
@@ -324,3 +344,4 @@ class Agent(BaseAgent):
             if file_handler:
                 logger.removeHandler(file_handler)
                 file_handler.close()
+        return result
