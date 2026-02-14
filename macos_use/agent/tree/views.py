@@ -2,11 +2,8 @@
 Data classes for representing macOS accessibility tree elements and state.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Any
-import json
-
-WARNING_MESSAGE="The desktop UI services are temporarily unavailable. Please wait a few seconds and continue."
-EMPTY_MESSAGE="No elements found"
+from tabulate import tabulate
+from typing import Optional
 
 @dataclass
 class BoundingBox:
@@ -94,7 +91,6 @@ class TreeElementNode:
     is_focused: bool = False
     element_type: str = ''
     actions: list[str] = field(default_factory=list)
-    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_row(self, index: int) -> list:
         """Convert to a table row for display."""
@@ -115,7 +111,6 @@ class ScrollElementNode:
     vertical_scroll_percent: float = 0.0
     is_focused: bool = False
     element_type: str = ''
-    metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_row(self, index: int, base_index: int) -> list:
         """Convert to a table row for display."""
@@ -125,7 +120,11 @@ class ScrollElementNode:
             self.role,
             self.name,
             self.center.to_string(),
-            json.dumps(self.metadata)
+            self.horizontal_scrollable,
+            self.horizontal_scroll_percent,
+            self.vertical_scrollable,
+            self.vertical_scroll_percent,
+            self.is_focused
         ]
 
 @dataclass
@@ -136,7 +135,6 @@ class TextElementNode:
 @dataclass
 class TreeState:
     """Represents the current state of the accessibility tree."""
-    status: bool = True
     root_node: Optional[TreeElementNode] = None
     dom_node: Optional[ScrollElementNode] = None
     interactive_nodes: list[TreeElementNode] = field(default_factory=list)
@@ -145,45 +143,29 @@ class TreeState:
 
     def interactive_elements_to_string(self) -> str:
         """Convert interactive elements to a pipe-separated string format."""
-        parts = []
-        if not self.status:
-            parts.append(WARNING_MESSAGE)
-            return "\n".join(parts)
-        if not self.interactive_nodes and self.status:
-            parts.append(EMPTY_MESSAGE)
-            return "\n".join(parts)
-        # Pipe-separated values with clear header
-        header = "# id|window|control_type|name|coords|metadata"
+        if not self.interactive_nodes:
+            return "No interactive elements"
+        header = "# id|window|role|type|name|coords|focus"
         rows = [header]
         for idx, node in enumerate(self.interactive_nodes):
-            metadata = dict(node.metadata)
-            metadata['has_focused'] = node.is_focused
-            row = f"{idx}|{node.window_name}|{node.element_type or node.role}|{node.name}|{node.center.to_string()}|{json.dumps(metadata)}"
+            label = node.name or node.description or node.value or "(no label)"
+            row = f"{idx}|{node.window_name}|{node.role}|{node.element_type}|{label}|{node.center.to_string()}|{node.is_focused}"
             rows.append(row)
-        parts.append("\n".join(rows))
-        return "\n".join(parts)
+        return "\n".join(rows)
 
     def scrollable_elements_to_string(self) -> str:
         """Convert scrollable elements to a pipe-separated string format."""
-        parts = []
-        if not self.status:
-            parts.append(WARNING_MESSAGE)
-            return "\n".join(parts)
-        if not self.scrollable_nodes and self.status:
-            parts.append(EMPTY_MESSAGE)
-            return "\n".join(parts)
-        # Pipe-separated values with clear header
-        header = "# id|window|control_type|name|coords|metadata"
+        if not self.scrollable_nodes:
+            return "No scrollable elements"
+        header = "# id|window|role|name|coords|h_scroll|h_pct|v_scroll|v_pct|focus"
         rows = [header]
         base_index = len(self.interactive_nodes)
         for idx, node in enumerate(self.scrollable_nodes):
-            metadata = dict(node.metadata)
-            metadata['has_focused'] = node.is_focused
-            row = (f"{base_index + idx}|{node.window_name}|{node.element_type or node.role}|{node.name}|"
-                   f"{node.center.to_string()}|{json.dumps(metadata)}")
+            row = (f"{base_index + idx}|{node.window_name}|{node.role}|{node.name}|"
+                   f"{node.center.to_string()}|{node.horizontal_scrollable}|{node.horizontal_scroll_percent}|"
+                   f"{node.vertical_scrollable}|{node.vertical_scroll_percent}|{node.is_focused}")
             rows.append(row)
-        parts.append("\n".join(rows))
-        return "\n".join(parts)
+        return "\n".join(rows)
 
 # Type alias for any element node type
 ElementNode = TreeElementNode | ScrollElementNode | TextElementNode

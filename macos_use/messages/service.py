@@ -33,7 +33,61 @@ class ImageMessage(BaseMessage):
     image: Image|None = None
     images: list[Image] = []
     mime_type: str="image/png"
+
+    # Maximum raw image size in bytes (API limit is 5 MB; use 4.8 MB for safety)
+    _MAX_IMAGE_BYTES: int = 4_800_000
     
+    @staticmethod
+    def _compress_image(img: Image, mime_type: str, max_bytes: int = 4_800_000) -> tuple[bytes, str]:
+        """Compress an image to fit within *max_bytes*.
+
+        Returns:
+            A tuple of (image_bytes, actual_mime_type).
+
+        Strategy:
+        1. Try saving in the requested format with quality=85.
+        2. If still too large, fall back to JPEG and reduce quality progressively.
+        3. If still too large, resize the image (halve dimensions) and repeat.
+        """
+        def _save(image: Image, fmt: str, quality: int) -> bytes:
+            buf = BytesIO()
+            # Ensure RGB mode for JPEG (JPEG doesn't support alpha)
+            save_img = image.convert("RGB") if fmt.upper() == "JPEG" else image
+            save_img.save(buf, format=fmt, quality=quality)
+            return buf.getvalue()
+
+        img_format = mime_type.split("/")[-1].upper()
+        if img_format == "JPG":
+            img_format = "JPEG"
+        original_mime = mime_type
+
+        # First attempt: original format, quality 85
+        data = _save(img, img_format, 85)
+        if len(data) <= max_bytes:
+            return data, original_mime
+
+        # Switch to JPEG for much better compression
+        img_format = "JPEG"
+        actual_mime = "image/jpeg"
+
+        for quality in (80, 60, 40, 25):
+            data = _save(img, img_format, quality)
+            if len(data) <= max_bytes:
+                return data, actual_mime
+
+        # Still too large – progressively resize
+        current = img
+        for _ in range(5):
+            new_w = max(current.width // 2, 320)
+            new_h = max(current.height // 2, 240)
+            current = current.resize((new_w, new_h), resample=3)  # LANCZOS
+            data = _save(current, img_format, 50)
+            if len(data) <= max_bytes:
+                return data, actual_mime
+
+        # Last resort: return whatever we have
+        return data, actual_mime
+
     def image_to_base64(self) -> str:
         image_bytes = self.image_to_bytes()
         base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -52,22 +106,30 @@ class ImageMessage(BaseMessage):
             self.images[i] = self.images[i].resize(size=size)
 
     def image_to_bytes(self) -> bytes:
-        buffered = BytesIO()
-        format = self.mime_type.split("/")[-1]
-        self.image.save(buffered, format=format,quality=80)
-        return buffered.getvalue()
+        data, actual_mime = self._compress_image(self.image, self.mime_type, self._MAX_IMAGE_BYTES)
+        self.mime_type = actual_mime
+        return data
 
     def convert_images(self, format: str="base64") -> list[str|bytes]:
+        """Convert all images to base64 strings or raw bytes.
+
+        Side effect: updates ``self.mime_type`` to reflect the actual format
+        used after compression (e.g. ``image/jpeg`` when the original PNG was
+        too large).  LLM providers that read ``msg.mime_type`` after calling
+        this method will therefore get the correct value.
+        """
         results = []
+        actual_mime = self.mime_type
         target_images = self.images if self.images else ([self.image] if self.image else [])
         for img in target_images:
-            buffered = BytesIO()
-            img_format = self.mime_type.split("/")[-1]
-            img.save(buffered, format=img_format, quality=80)
+            data, actual_mime = self._compress_image(img, self.mime_type, self._MAX_IMAGE_BYTES)
             if format == "base64":
-                results.append(base64.b64encode(buffered.getvalue()).decode("utf-8"))
+                results.append(base64.b64encode(data).decode("utf-8"))
             else:
-                results.append(buffered.getvalue())
+                results.append(data)
+        # Update mime_type so downstream consumers (LLM providers) use the
+        # correct media type header.
+        self.mime_type = actual_mime
         return results
 
     def __repr__(self) -> str:

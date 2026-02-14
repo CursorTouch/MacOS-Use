@@ -201,7 +201,13 @@ class Desktop:
         
         return padded_screenshot
 
-    def get_state(self, as_bytes: bool = False) -> DesktopState:
+    def get_state(
+        self,
+        use_annotation: bool = True,
+        use_vision: bool = False,
+        as_bytes: bool = False,
+        scale: float = 1.0
+    ) -> DesktopState:
         """
         Capture the current desktop state including windows and accessibility tree.
         """
@@ -211,23 +217,15 @@ class Desktop:
         active_pid = active_window.pid if active_window else None
         window_name = active_window.name if active_window else ''
         is_browser = active_window.is_browser if active_window else False
-
-        if self.use_accessibility:
-            tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid, is_browser=is_browser)
-        else:
-            from macos_use.agent.tree.views import TreeState
-            tree_state = TreeState()
-
+        tree_state = self.tree.get_state(window_name=window_name, active_pid=active_pid, is_browser=is_browser)
+        
         screenshot = None
-        if self.use_vision:
-            if self.use_annotation:
-                nodes = tree_state.interactive_nodes if tree_state else []
-                if nodes:
-                    screenshot = self.get_annotated_screenshot(nodes=nodes)
-                else:
-                    screenshot = self.get_screenshot()
+        if use_vision:
+            if use_annotation:
+                nodes = tree_state.interactive_nodes
+                screenshot = self.get_annotated_screenshot(nodes=nodes, scale=scale)
             else:
-                screenshot = self.get_screenshot()
+                screenshot = self.get_screenshot(as_bytes=False, scale=scale)
             
             if as_bytes and screenshot:
                 buffer = BytesIO()

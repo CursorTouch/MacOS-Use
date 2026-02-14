@@ -10,7 +10,7 @@ def main():
     llm=ChatAnthropic(model="claude-haiku-4-5")
     # llm=ChatOllama(model="qwen3-vl:4b")
     # llm=ChatGroq(model="openai/gpt-oss-120b")
-    agent = Agent(llm=llm,log_to_file=True,auto_minimize=True)
+    agent = Agent(llm=llm,use_vision=True,log_to_file=True,auto_minimize=True)
     query=input("Enter your query: ")
     result=agent.invoke(query)
     print(result)
