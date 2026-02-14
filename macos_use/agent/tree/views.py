@@ -82,20 +82,13 @@ class TreeElementNode:
     bounding_box: BoundingBox
     center: Center
     role: str = ''
-    subrole: str = ''
     name: str = ''
-    description: str = ''
-    value: str = ''
     window_name: str = ''
-    is_enabled: bool = True
-    is_focused: bool = False
-    element_type: str = ''
-    actions: list[str] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     def to_row(self, index: int) -> list:
         """Convert to a table row for display."""
-        label = self.name or self.description or self.value or self.subrole or "(no label)"
-        return [index, self.window_name, self.role, label, self.center.to_string(), self.is_focused]
+        return [index, self.window_name, self.role, self.name, self.center.to_string(), self.metadata]
 
 @dataclass
 class ScrollElementNode:
@@ -105,12 +98,7 @@ class ScrollElementNode:
     window_name: str
     bounding_box: BoundingBox
     center: Center
-    horizontal_scrollable: bool = False
-    horizontal_scroll_percent: float = 0.0
-    vertical_scrollable: bool = False
-    vertical_scroll_percent: float = 0.0
-    is_focused: bool = False
-    element_type: str = ''
+    metadata: dict = field(default_factory=dict)
 
     def to_row(self, index: int, base_index: int) -> list:
         """Convert to a table row for display."""
@@ -120,11 +108,7 @@ class ScrollElementNode:
             self.role,
             self.name,
             self.center.to_string(),
-            self.horizontal_scrollable,
-            self.horizontal_scroll_percent,
-            self.vertical_scrollable,
-            self.vertical_scroll_percent,
-            self.is_focused
+            self.metadata
         ]
 
 @dataclass
@@ -145,11 +129,10 @@ class TreeState:
         """Convert interactive elements to a pipe-separated string format."""
         if not self.interactive_nodes:
             return "No interactive elements"
-        header = "# id|window|role|type|name|coords|focus"
+        header = "# id|window|role|name|coords|metadata"
         rows = [header]
         for idx, node in enumerate(self.interactive_nodes):
-            label = node.name or node.description or node.value or "(no label)"
-            row = f"{idx}|{node.window_name}|{node.role}|{node.element_type}|{label}|{node.center.to_string()}|{node.is_focused}"
+            row = f"{idx}|{node.window_name}|{node.role}|{node.name}|{node.center.to_string()}|{node.metadata}"
             rows.append(row)
         return "\n".join(rows)
 
@@ -157,13 +140,11 @@ class TreeState:
         """Convert scrollable elements to a pipe-separated string format."""
         if not self.scrollable_nodes:
             return "No scrollable elements"
-        header = "# id|window|role|name|coords|h_scroll|h_pct|v_scroll|v_pct|focus"
+        header = "# id|window|role|name|coords|metadata"
         rows = [header]
         base_index = len(self.interactive_nodes)
         for idx, node in enumerate(self.scrollable_nodes):
-            row = (f"{base_index + idx}|{node.window_name}|{node.role}|{node.name}|"
-                   f"{node.center.to_string()}|{node.horizontal_scrollable}|{node.horizontal_scroll_percent}|"
-                   f"{node.vertical_scrollable}|{node.vertical_scroll_percent}|{node.is_focused}")
+            row = (f"{base_index + idx}|{node.window_name}|{node.role}|{node.name}|{node.center.to_string()}|{node.metadata}")
             rows.append(row)
         return "\n".join(rows)
 

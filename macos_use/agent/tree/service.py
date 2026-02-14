@@ -5,6 +5,7 @@ Uses multi-threading for parallel traversal of different UI regions.
 
 Now uses the centralized ax module for all accessibility operations.
 """
+from curses import meta
 import macos_use.ax as ax
 from macos_use.agent.tree.views import (
     TreeState,
@@ -437,19 +438,23 @@ class Tree:
             
             role_description = ax.GetAttribute(element, ax.Attribute.RoleDescription)
 
+            metdata={
+                "is_focused": is_focused
+            }
+            if role_description:
+                metdata['type'] = role_description
+            if actions:
+                metdata['actions'] = list(actions)
+            if subrole:
+                metdata['subrole'] = friendly_subrole
+
             node = TreeElementNode(
                 bounding_box=bbox,
                 center=center,
                 role=role or '',
-                subrole=subrole or '',
                 name=label,
-                description=description or '',
-                value=value if isinstance(value, str) else '',
                 window_name=window_name,
-                is_enabled=is_enabled is not False,
-                is_focused=is_focused,
-                element_type=role_description or '',
-                actions=list(actions) if actions else [],
+                metadata=metdata,
             )
 
             # In DOM mode, add to DOM interactive list; otherwise to regular list
@@ -579,16 +584,20 @@ class Tree:
             if v_scrollable:
                 v_percent = self._get_scrollbar_value(v_scrollbar) * 100.0
 
+            metadata = {
+                'horizontal_scrollable': h_scrollable,
+                'horizontal_scroll_percent': round(h_percent, 1),
+                'vertical_scrollable': v_scrollable,
+                'vertical_scroll_percent': round(v_percent, 1),
+            }
+
             return ScrollElementNode(
                 name='DOM',
                 role=ax.Role.WebArea,
                 window_name='DOM',
                 bounding_box=bbox,
                 center=bbox.get_center(),
-                horizontal_scrollable=h_scrollable,
-                horizontal_scroll_percent=round(h_percent, 1),
-                vertical_scrollable=v_scrollable,
-                vertical_scroll_percent=round(v_percent, 1),
+                metadata=metadata,
             )
         except Exception as e:
             logger.debug(f"[Tree] Failed to build DOM node: {e}")
@@ -648,18 +657,19 @@ class Tree:
         v_percent = self._get_scrollbar_value(v_scrollbar) * 100.0
         
         label = title or description or role or '(scrollable)'
-        
+        metadata = {
+            'horizontal_scrollable': h_scrollable,
+            'horizontal_scroll_percent': round(h_percent, 1),
+            'vertical_scrollable': v_scrollable,
+            'vertical_scroll_percent': round(v_percent, 1),
+        }
         return ScrollElementNode(
             name=label,
             role=role,
             window_name=window_name,
             bounding_box=bbox,
             center=bbox.get_center(),
-            horizontal_scrollable=h_scrollable,
-            horizontal_scroll_percent=round(h_percent, 1),
-            vertical_scrollable=v_scrollable,
-            vertical_scroll_percent=round(v_percent, 1),
-            is_focused=is_focused,
+            metadata=metadata,
         )
 
     def on_focus_changed(self, element):
