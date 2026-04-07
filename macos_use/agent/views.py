@@ -1,7 +1,5 @@
-from macos_use.agent.desktop.views import DesktopState
 from macos_use.messages import BaseMessage
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -13,10 +11,15 @@ class AgentResult:
 
 @dataclass
 class AgentState:
-    task: str = ""
+    task: str | None = None
     messages: list[BaseMessage] = field(default_factory=list)
     error_messages: list[BaseMessage] = field(default_factory=list)
-    desktop: Optional[DesktopState] = None
     step: int = 0
     max_steps: int = 25
     max_consecutive_failures: int = 3
+
+    def reset(self):
+        self.task = None
+        self.messages.clear()
+        self.error_messages.clear()
+        self.step = 0

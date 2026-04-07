@@ -1,9 +1,10 @@
-from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_IDS
+from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_IDS, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT
 from macos_use.agent.desktop.views import DesktopState, Size, Window, Status
 from macos_use.agent.tree.views import BoundingBox, TreeElementNode
 from PIL import Image, ImageDraw, ImageFont, ImageGrab
 from typing import Literal, Optional, Tuple, Union
 from macos_use.agent.tree.service import Tree
+from contextlib import contextmanager
 import macos_use.ax as ax
 import requests
 import logging
@@ -16,38 +17,82 @@ logger = logging.getLogger(__name__)
 
 
 class Desktop:
-    def __init__(self):
+    def __init__(
+        self,
+        use_vision: bool = False,
+        use_annotation: bool = False,
+        use_accessibility: bool = True,
+    ):
+        if use_annotation and not use_vision:
+            use_vision = True
+        if use_annotation and not use_accessibility:
+            use_accessibility = True
+        self.use_vision = use_vision
+        self.use_annotation = use_annotation
+        self.use_accessibility = use_accessibility
         self.tree = Tree()
-        self.desktop_state = None
+        self.desktop_state: Optional[DesktopState] = None
+
+        # Cached system info
+        self._cached_macos_version: Optional[str] = None
+        self._cached_default_language: Optional[str] = None
 
     def get_screen_size(self) -> Size:
         """Return the virtual screen size (all displays combined) in logical points."""
         width, height = ax.GetScreenSize()
         return Size(width=width, height=height)
 
-    def get_state(
-        self,
-        use_vision: bool = False,
-        as_bytes: bool = False,
-        scale: float = 1.0,
-    ):
+    def get_macos_version(self) -> str:
+        if self._cached_macos_version is None:
+            self._cached_macos_version = ax.GetMacOSVersion()
+        return self._cached_macos_version
+
+    def get_default_language(self) -> str:
+        if self._cached_default_language is None:
+            self._cached_default_language = ax.GetDefaultLanguage()
+        return self._cached_default_language
+
+    def get_user_account_type(self) -> str:
+        return "Local Account"
+
+    def get_dpi_scaling(self) -> float:
+        return ax.GetDPIScale()
+
+    @contextmanager
+    def auto_minimize(self):
+        """Minimize the current foreground window and restore it after the block."""
+        app = ax.GetFrontmostApplication()
+        window = app.MainWindow if app else None
+        try:
+            if window:
+                window.Minimize()
+            yield
+        finally:
+            if window:
+                window.Unminimize()
+
+    def get_state(self) -> DesktopState:
         windows = self.get_windows()
         active_window = self.get_foreground_window()
-        tree_state = self.tree.get_state(active_window=active_window)
-        if use_vision:
-            screenshot = self.get_annotated_screenshot(
-                nodes=tree_state.interactive_nodes,
-                as_bytes=as_bytes,
-                scale=scale,
-            )
+        tree_state = self.tree.get_state(active_window=active_window) if self.use_accessibility else None
+
+        if self.use_vision:
+            screen_size = self.get_screen_size()
+            scale_w = MAX_IMAGE_WIDTH / screen_size.width if screen_size.width > MAX_IMAGE_WIDTH else 1.0
+            scale_h = MAX_IMAGE_HEIGHT / screen_size.height if screen_size.height > MAX_IMAGE_HEIGHT else 1.0
+            scale = min(scale_w, scale_h)
+            nodes = tree_state.interactive_nodes if self.use_annotation and tree_state else []
+            screenshot = self.get_annotated_screenshot(nodes=nodes, scale=scale) if self.use_annotation and nodes else self.get_screenshot()
         else:
             screenshot = None
-        return DesktopState(
+
+        self.desktop_state = DesktopState(
             active_window=active_window,
             windows=windows,
             screenshot=screenshot,
             tree_state=tree_state,
         )
+        return self.desktop_state
 
     def app(
         self,

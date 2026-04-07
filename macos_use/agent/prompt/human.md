@@ -1,7 +1,7 @@
 [Begin of Agent State]
     Steps: {steps}/{max_steps}
 [End of Agent State]
-    
+{loop_warning}
 [Begin of Desktop]
     Cursor Location: {cursor_location}
     

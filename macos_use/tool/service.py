@@ -43,7 +43,7 @@ class Tool:
             "parameters": parameters
         } 
 
-    def validate(self,args:dict):
+    def validate_params(self,args:dict):
         errors:list[str]=[]
         try:
             self.model(**args)
@@ -64,7 +64,20 @@ class Tool:
         return self
     
     def invoke(self, *args, **kwargs):
+        import asyncio, inspect
         try:
+            if inspect.iscoroutinefunction(self.function):
+                return asyncio.run(self.function(*args, **kwargs))
+            return self.function(*args, **kwargs)
+        except Exception as e:
+            logger.error(f"Error invoking tool {self.name}: {e}")
+            return str(e)
+
+    async def ainvoke(self, *args, **kwargs):
+        import inspect
+        try:
+            if inspect.iscoroutinefunction(self.function):
+                return await self.function(*args, **kwargs)
             return self.function(*args, **kwargs)
         except Exception as e:
             logger.error(f"Error invoking tool {self.name}: {e}")
