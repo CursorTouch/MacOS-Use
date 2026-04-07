@@ -415,6 +415,21 @@ class Attribute:
     RTFForRange = 'AXRTFForRangeParameterized'
     StyleRangeForIndex = 'AXStyleRangeForIndexParameterized'
 
+    # Date/Time field attributes
+    AMPMField = 'AXAMPMField'
+    DayField = 'AXDayField'
+    HourField = 'AXHourField'
+    MinuteField = 'AXMinuteField'
+    SecondField = 'AXSecondField'
+    MonthField = 'AXMonthField'
+    YearField = 'AXYearField'
+    IncrementorElement = 'AXIncrementor'
+
+    # Additional documented attributes
+    AllowedValues = 'AXAllowedValues'
+    ValueIncrement = 'AXValueIncrement'
+    ColumnTitle = 'AXColumnTitle'
+
 
 # =============================================================================
 # Actions
@@ -482,6 +497,7 @@ class Notification:
     WindowResized = 'AXWindowResized'
     WindowMiniaturized = 'AXWindowMiniaturized'
     WindowDeminiaturized = 'AXWindowDeminiaturized'
+    MainWindowChanged = 'AXMainWindowChanged'
 
     # Element lifecycle notifications
     Created = 'AXCreated'
@@ -497,9 +513,12 @@ class Notification:
     TitleChanged = 'AXTitleChanged'
     SelectedTextChanged = 'AXSelectedTextChanged'
     SelectedChildrenChanged = 'AXSelectedChildrenChanged'
+    SelectedChildrenMoved = 'AXSelectedChildrenMoved'
     SelectedRowsChanged = 'AXSelectedRowsChanged'
     SelectedColumnsChanged = 'AXSelectedColumnsChanged'
+    SelectedCellsChanged = 'AXSelectedCellsChanged'
     RowCountChanged = 'AXRowCountChanged'
+    UnitsChanged = 'AXUnitsChanged'
 
     # Layout notifications
     Moved = 'AXMoved'
@@ -523,6 +542,7 @@ class Notification:
 FOCUS_NOTIFICATIONS = {
     Notification.FocusedUIElementChanged,
     Notification.FocusedWindowChanged,
+    Notification.MainWindowChanged,
 }
 
 STRUCTURE_NOTIFICATIONS = {
@@ -539,7 +559,11 @@ PROPERTY_NOTIFICATIONS = {
     Notification.TitleChanged,
     Notification.SelectedTextChanged,
     Notification.SelectedChildrenChanged,
+    Notification.SelectedChildrenMoved,
     Notification.SelectedRowsChanged,
+    Notification.SelectedColumnsChanged,
+    Notification.SelectedCellsChanged,
+    Notification.UnitsChanged,
     Notification.Moved,
     Notification.Resized,
 }
@@ -843,3 +867,99 @@ class Units:
     Paragraphs = 'AXParagraphsUnit'
     Pages = 'AXPagesUnit'
     Document = 'AXDocumentUnit'
+
+
+# =============================================================================
+# Notification Info Keys
+# =============================================================================
+
+class NotificationKey:
+    """
+    Keys used in notification info dictionaries.
+    Passed to AXObserverCallbackWithInfo callbacks.
+    Refer: HIServices/AXNotificationConstants.h
+    """
+    Announcement = 'AXAnnouncementKey'
+    Priority = 'AXPriorityKey'
+    UIElements = 'AXUIElementsKey'
+
+
+# =============================================================================
+# AXValue Types
+# =============================================================================
+
+class AXValueType:
+    """
+    Types of data stored in an AXValueRef.
+    Used with AXValueCreate and AXValueGetValue.
+    Refer: HIServices/AXValue.h
+    """
+    CGPoint = 1   # kAXValueCGPointType
+    CGSize = 2    # kAXValueCGSizeType
+    CGRect = 3    # kAXValueCGRectType
+    CFRange = 4   # kAXValueCFRangeType
+    AXError = 5   # kAXValueAXErrorType
+    Illegal = 0   # kAXValueIllegalType
+
+
+# =============================================================================
+# Text Attributed String Keys
+# =============================================================================
+
+class TextAttribute:
+    """
+    Keys for dictionaries describing attributed strings in the accessibility API.
+    Used with parameterized attributes like AXAttributedStringForRange.
+    Refer: HIServices/AXTextAttributedString.h
+    """
+    # Font attributes
+    Font = 'AXFontText'
+    FontFamily = 'AXFontFamily'
+    FontName = 'AXFontName'
+    FontSize = 'AXFontSize'
+    VisibleName = 'AXVisibleName'
+
+    # Color attributes
+    ForegroundColor = 'AXForegroundColorText'
+    BackgroundColor = 'AXBackgroundColorText'
+    UnderlineColor = 'AXUnderlineColorText'
+    StrikethroughColor = 'AXStrikethroughColorText'
+
+    # Style attributes
+    Underline = 'AXUnderlineText'
+    Strikethrough = 'AXStrikethroughText'
+    Shadow = 'AXShadowText'
+    Superscript = 'AXSuperscriptText'
+
+    # Content attributes
+    Attachment = 'AXAttachmentText'
+    Link = 'AXLinkText'
+    NaturalLanguage = 'AXNaturalLanguageText'
+    ReplacementString = 'AXReplacementStringText'
+
+    # Spell-check attributes
+    Misspelled = 'AXMisspelledText'
+    MarkedMisspelled = 'AXMarkedMisspelledText'
+    Autocorrected = 'AXAutocorrectedText'
+
+
+# =============================================================================
+# Activation Policy
+# =============================================================================
+
+class ActivationPolicy:
+    """
+    Application activation policies from NSApplicationActivationPolicy.
+    Determines how an application appears in the Dock and App Switcher.
+    """
+    Regular = 0       # Appears in Dock and App Switcher (normal apps)
+    Accessory = 1     # Does not appear in Dock, may appear in App Switcher
+    Prohibited = 2    # Does not appear in Dock or App Switcher (background agents)
+
+
+# Reverse lookup: int → human-readable name
+ActivationPolicyNames = {
+    0: 'Regular',
+    1: 'Accessory',
+    2: 'Prohibited',
+}

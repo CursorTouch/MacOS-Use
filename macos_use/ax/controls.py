@@ -6,8 +6,11 @@ with typed subclasses for specific control types.
 Equivalent to the Windows UIA controls.py module, adapted for macOS.
 """
 
+from __future__ import annotations
+
 import logging
-from typing import Optional, List, Callable, Any
+import time
+from typing import Optional, List, Callable, Any, Union
 
 from ApplicationServices import (
     AXUIElementCreateApplication,
@@ -33,6 +36,7 @@ from .enums import (
     SCROLLABLE_ROLES,
     CONTAINER_ROLES,
     WINDOW_CONTROL_SUBROLES,
+    ActivationPolicyNames,
 )
 from .core import (
     Rect,
@@ -49,6 +53,17 @@ from .core import (
     GetRect,
     GetChildCount,
     IsAttributeSettable,
+    GetElementPid,
+    GetForegroundWindowPID,
+    Click as _Click,
+    RightClick as _RightClick,
+    DoubleClick as _DoubleClick,
+    MiddleClick as _MiddleClick,
+    TypeText as _TypeText,
+    WheelDown as _WheelDown,
+    WheelUp as _WheelUp,
+    DragTo as _DragTo,
+    MoveTo as _MoveTo,
 )
 
 logger = logging.getLogger(__name__)
@@ -732,32 +747,239 @@ class Control:
 # =============================================================================
 
 class ApplicationControl(Control):
-    """Control for AXApplication elements."""
+    """
+    Control for AXApplication elements.
+
+    Wraps both the AXUIElementRef (for accessibility tree access) and
+    the NSRunningApplication (for process-level metadata like bundle ID,
+    icon, launch date, hidden state, etc.).
+
+    The NSRunningApplication is lazily resolved from the PID on first access.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._ns_running_app = None  # Lazily resolved
+
+    def _get_ns_running_app(self):
+        """Lazily resolve the NSRunningApplication for this application's PID."""
+        if self._ns_running_app is None:
+            pid = GetElementPid(self.Element)
+            if pid is not None:
+                from Cocoa import NSWorkspace
+                for app in NSWorkspace.sharedWorkspace().runningApplications():
+                    if app.processIdentifier() == pid:
+                        self._ns_running_app = app
+                        break
+        return self._ns_running_app
+
+    def __str__(self) -> str:
+        return (
+            f"App(Name={self.Name!r}, Status={self.Status!r}, "
+            f"Policy={self.ActivationPolicy!r})"
+        )
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    @property
+    def Name(self) -> str:
+        """Get the display name of this application."""
+        name = self.Title
+        return name if name else self.LocalizedName
+
+    @property
+    def IsMinimized(self) -> bool:
+        """Check if all of this application's windows are minimized."""
+        windows = self.Windows
+        if not windows:
+            return False
+        return all(w.IsMinimized for w in windows)
+
+    @property
+    def IsFullScreen(self) -> bool:
+        """Check if any of this application's windows are in fullscreen mode."""
+        windows = self.Windows
+        if not windows:
+            return False
+        return any(w.IsFullScreen for w in windows)
+
+    @property
+    def Status(self) -> str:
+        """
+        Get a human-readable status summarizing the application's current state.
+
+        Returns one of: 'Active', 'Fullscreen', 'Visible', 'Hidden', 'Minimized', 'Windowless'.
+        """
+        if self.IsHidden:
+            return 'Hidden'
+        windows = self.Windows
+        if not windows:
+            return 'Windowless'
+        if all(w.IsMinimized for w in windows):
+            return 'Minimized'
+        if self.IsActive:
+            if any(w.IsFullScreen for w in windows):
+                return 'Fullscreen'
+            return 'Active'
+        return 'Visible'
 
     @property
     def FocusedUIElement(self) -> Optional[Control]:
         """Get the currently focused UI element in this application."""
-        elem = GetAttribute(self._element, Attribute.FocusedUIElement)
+        elem = GetAttribute(self.Element, Attribute.FocusedUIElement)
         if elem:
-            return Control(element=elem)
+            return CreateControl(elem)
         return None
 
     @property
+    def FocusedWindow(self) -> Optional[WindowControl]:
+        """Get the focused window of this application element."""
+        window = GetAttribute(self.Element, Attribute.FocusedWindow)
+        if window:
+            return CreateControl(window)
+        return None
+
+    @property
+    def MainWindow(self) -> Optional[WindowControl]:
+        """Get the main window of this application element."""
+        window = GetAttribute(self.Element, Attribute.MainWindow)
+        if window:
+            return CreateControl(window)
+        return None
+
+    @property
+    def Windows(self) -> List[WindowControl]:
+        """Get all windows of this application element."""
+        windows = GetAttribute(self.Element, Attribute.Windows)
+        if windows:
+            return [CreateControl(w) for w in windows]
+        return []
+
+    @property
     def IsApplicationRunning(self) -> bool:
-        """Check if the application is running."""
-        val = GetAttribute(self._element, Attribute.IsApplicationRunning)
+        """Check if the application is running (AX attribute)."""
+        val = GetAttribute(self.Element, Attribute.IsApplicationRunning)
         return val is True
 
     @property
     def EnhancedUserInterface(self) -> bool:
         """Get the enhanced user interface flag."""
-        val = GetAttribute(self._element, Attribute.Enhanced)
+        val = GetAttribute(self.Element, Attribute.Enhanced)
         return val is True
 
     @EnhancedUserInterface.setter
     def EnhancedUserInterface(self, value: bool) -> None:
         """Set the enhanced user interface flag (enables deeper tree access in some apps)."""
-        SetAttribute(self._element, Attribute.Enhanced, value)
+        SetAttribute(self.Element, Attribute.Enhanced, value)
+
+    @property
+    def PID(self) -> Optional[int]:
+        """Get the process identifier (PID) of this application."""
+        return GetElementPid(self.Element)
+
+    @property
+    def BundleIdentifier(self) -> Optional[str]:
+        """Get the CFBundleIdentifier of this application."""
+        app = self._get_ns_running_app()
+        if app:
+            val = app.bundleIdentifier()
+            return str(val) if val else None
+        return None
+
+    @property
+    def BundleURL(self) -> Optional[str]:
+        """Get the file URL to the application's .app bundle."""
+        app = self._get_ns_running_app()
+        if app:
+            url = app.bundleURL()
+            return str(url) if url else None
+        return None
+
+    @property
+    def ExecutableURL(self) -> Optional[str]:
+        """Get the file URL to the application's executable binary."""
+        app = self._get_ns_running_app()
+        if app:
+            url = app.executableURL()
+            return str(url) if url else None
+        return None
+
+    @property
+    def LocalizedName(self) -> Optional[str]:
+        """Get the localized display name of the application."""
+        app = self._get_ns_running_app()
+        if app:
+            val = app.localizedName()
+            return str(val) if val else None
+        return None
+
+    @property
+    def Icon(self):
+        """Get the application icon as an NSImage."""
+        app = self._get_ns_running_app()
+        if app:
+            return app.icon()
+        return None
+
+    @property
+    def LaunchDate(self):
+        """Get the date and time when the application was launched."""
+        app = self._get_ns_running_app()
+        if app:
+            return app.launchDate()
+        return None
+
+    @property
+    def IsActive(self) -> bool:
+        """
+        Check if this application is the currently active (frontmost) application.
+
+        Uses CGWindowListCopyWindowInfo instead of NSRunningApplication.isActive()
+        because the latter relies on NSRunLoop which may be stale in scripts.
+        """
+        pid = self.PID
+        if pid is None:
+            return False
+        frontmost_pid = GetForegroundWindowPID()
+        return pid == frontmost_pid
+
+    @property
+    def IsHidden(self) -> bool:
+        """Check if this application is currently hidden."""
+        app = self._get_ns_running_app()
+        if app:
+            return bool(app.isHidden())
+        return False
+
+    @property
+    def IsFinishedLaunching(self) -> bool:
+        """Check if the application has finished launching."""
+        app = self._get_ns_running_app()
+        if app:
+            return bool(app.isFinishedLaunching())
+        return False
+
+    @property
+    def IsTerminated(self) -> bool:
+        """Check if the application has been terminated."""
+        app = self._get_ns_running_app()
+        if app:
+            return bool(app.isTerminated())
+        return False
+
+    @property
+    def ActivationPolicy(self) -> Optional[str]:
+        """
+        Get the activation policy of the application as a human-readable string.
+
+        Returns: 'Regular', 'Accessory', 'Prohibited', or None.
+        """
+        app = self._get_ns_running_app()
+        if app:
+            policy = int(app.activationPolicy())
+            return ActivationPolicyNames.get(policy, f'Unknown({policy})')
+        return None
 
 
 class WindowControl(Control):
@@ -784,6 +1006,14 @@ class WindowControl(Control):
         if zoom_btn:
             return PerformAction(zoom_btn, Action.Press)
         return False
+
+    def Resize(self, width: float, height: float) -> bool:
+        """Resize this window to the specified dimensions."""
+        return SetAttribute(self._element, Attribute.Size, (width, height))
+
+    def MoveWindowTo(self, x: float, y: float) -> bool:
+        """Move this window to the specified screen position."""
+        return SetAttribute(self._element, Attribute.Position, (x, y))
 
     @property
     def DefaultButton(self) -> Optional[Control]:

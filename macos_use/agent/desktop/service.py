@@ -276,20 +276,20 @@ class Desktop:
         screen_size = ax.GetScreenSize()
         
         for app in running_apps:
-            if app.activationPolicy() != 0:
+            if app.ActivationPolicy != 'Regular':
                 continue
-            
-            bundle_id = app.bundleIdentifier() or ''
+
+            bundle_id = app.BundleIdentifier or ''
             if bundle_id in EXCLUDED_BUNDLE_IDS:
                 continue
-            
-            app_name = app.localizedName()
-            pid = app.processIdentifier()
+
+            app_name = app.LocalizedName
+            pid = app.PID
             is_browser = bundle_id in BROWSER_BUNDLE_IDS
-            
+
             app_windows = pid_windows.get(pid, [])
-            
-            if app.isHidden():
+
+            if app.IsHidden:
                 status = Status.HIDDEN
                 bbox = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
             elif not app_windows:
@@ -349,12 +349,12 @@ class Desktop:
 
         if windows:
             for window in windows:
-                if window.pid == frontmost.processIdentifier():
+                if window.pid == frontmost.PID:
                     return window
 
-        app_name = frontmost.localizedName()
-        bundle_id = frontmost.bundleIdentifier() or ''
-        pid = frontmost.processIdentifier()
+        app_name = frontmost.LocalizedName
+        bundle_id = frontmost.BundleIdentifier or ''
+        pid = frontmost.PID
         is_browser = bundle_id in BROWSER_BUNDLE_IDS
 
         return Window(
@@ -423,8 +423,8 @@ class Desktop:
     def _resolve_app_pid(self, name: str) -> Optional[int]:
         """Resolve an application name to its PID (if currently running)."""
         for app in ax.GetRunningApplications():
-            if app.localizedName() == name:
-                return app.processIdentifier()
+            if app.LocalizedName == name:
+                return app.PID
         return None
 
     def _wait_for_app_focus(self, target_pid: int, timeout: float = 3.0, interval: float = 0.2) -> bool:

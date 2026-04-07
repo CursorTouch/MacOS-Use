@@ -52,11 +52,11 @@ class Tree:
         launchpad_element is None if Launchpad is not active.
         ax_dock is None if Dock is not running.
         """
-        dock_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.dock"), None)
+        dock_app = next((app for app in apps if app.BundleIdentifier == "com.apple.dock"), None)
         if not dock_app:
             return None, None
             
-        pid = dock_app.processIdentifier()
+        pid = dock_app.PID
         ax_dock = ax.ControlFromPID(pid)
         children = ax.GetChildren(ax_dock)
         
@@ -136,16 +136,16 @@ class Tree:
             if active_pid:
                 pid = active_pid
                 for app in apps:
-                    if app.processIdentifier() == active_pid:
-                        app_name = app.localizedName()
+                    if app.PID == active_pid:
+                        app_name = app.LocalizedName
                         break
             else:
                 frontmost = ax.GetFrontmostApplication()
                 if not frontmost:
                     logger.warning("No frontmost application found")
                     return TreeState()
-                pid = frontmost.processIdentifier()
-                app_name = frontmost.localizedName()
+                pid = frontmost.PID
+                app_name = frontmost.LocalizedName
 
             ax_app = ax.ControlFromPID(pid)
 
@@ -184,9 +184,9 @@ class Tree:
                 tasks.append(('menubar', menu_bar, 'MenuBar', None, False))
 
             # Task 4: Scan Control Center (WiFi, Bluetooth, etc.)
-            cc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.controlcenter"), None)
+            cc_app = next((app for app in apps if app.BundleIdentifier == "com.apple.controlcenter"), None)
             if cc_app:
-                ax_cc = ax.ControlFromPID(cc_app.processIdentifier())
+                ax_cc = ax.ControlFromPID(cc_app.PID)
                 
                 cc_windows = ax.GetAttribute(ax_cc, ax.Attribute.Windows)
                 if cc_windows and len(cc_windows) > 0:
@@ -206,9 +206,9 @@ class Tree:
                             tasks.append(('control_center_popover', child, 'Control Center', None, False))
 
             # Task 4.5: Scan Notification Center (Date/Time, Widgets)
-            nc_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.notificationcenterui"), None)
+            nc_app = next((app for app in apps if app.BundleIdentifier == "com.apple.notificationcenterui"), None)
             if nc_app:
-                ax_nc = ax.ControlFromPID(nc_app.processIdentifier())
+                ax_nc = ax.ControlFromPID(nc_app.PID)
                 
                 nc_windows = ax.GetAttribute(ax_nc, ax.Attribute.Windows)
                 if nc_windows:
@@ -226,26 +226,26 @@ class Tree:
                             tasks.append(('notification_center_child', child, 'Notification Center', None, False))
 
             # Task 5: Scan SystemUIServer (battery, volume, etc.)
-            ss_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.systemuiserver"), None)
+            ss_app = next((app for app in apps if app.BundleIdentifier == "com.apple.systemuiserver"), None)
             if ss_app:
-                ax_ss = ax.ControlFromPID(ss_app.processIdentifier())
+                ax_ss = ax.ControlFromPID(ss_app.PID)
                 ss_menu = ax.GetAttribute(ax_ss, ax.Attribute.MenuBar)
                 if ss_menu:
                     tasks.append(('system_ui', ss_menu, 'SystemUI', None, False))
 
             # Task 6: Scan Spotlight
-            sl_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.Spotlight"), None)
+            sl_app = next((app for app in apps if app.BundleIdentifier == "com.apple.Spotlight"), None)
             if sl_app:
-                ax_sl = ax.ControlFromPID(sl_app.processIdentifier())
+                ax_sl = ax.ControlFromPID(sl_app.PID)
                 sl_extras = ax.GetAttribute(ax_sl, ax.Attribute.ExtrasMenuBar)
                 if sl_extras:
                     tasks.append(('spotlight', sl_extras, 'Spotlight', None, False))
 
             # Task 7: Scan Desktop Icons (Finder) - only if no foreground window
             if not focused_window:
-                finder_app = next((app for app in apps if app.bundleIdentifier() == "com.apple.finder"), None)
+                finder_app = next((app for app in apps if app.BundleIdentifier == "com.apple.finder"), None)
                 if finder_app:
-                    ax_finder = ax.ControlFromPID(finder_app.processIdentifier())
+                    ax_finder = ax.ControlFromPID(finder_app.PID)
                     finder_children = ax.GetChildren(ax_finder)
                     if finder_children:
                         for child in finder_children:
