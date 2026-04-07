@@ -48,8 +48,10 @@ class Agent(BaseAgent):
         log_to_console: bool = True,
         event_subscriber: Callable[[AgentEvent], None] | None = None,
         experimental: bool = False,
+        disable_loop_detection: bool = False,
     ):
-        """Initialize the Agent.
+        """
+        Initialize the Agent.
 
         Args:
             mode: "flash" for lightweight prompts, "normal" for full prompts.
@@ -66,6 +68,7 @@ class Agent(BaseAgent):
             log_to_console: Show intermediate steps in the console.
             event_subscriber: Optional callback for each agent event.
             experimental: Include experimental tools.
+            disable_loop_detection: Disable loop detection warnings. Defaults to False.
         """
         self.name = "MacOS Use"
         self.description = "An agent that can interact with GUI elements on macOS"
@@ -90,6 +93,7 @@ class Agent(BaseAgent):
         self.context = Context()
         self.llm = llm
         self._loop_guard = LoopGuard()
+        self.disable_loop_detection = disable_loop_detection
 
         self.event = Event()
         if event_subscriber is not None:
@@ -132,7 +136,7 @@ class Agent(BaseAgent):
         for step in range(self.state.max_steps):
             self.state.step = step
 
-            nudge = self._loop_guard.check()
+            nudge = None if self.disable_loop_detection else self._loop_guard.check()
             state_msg = self.context.state(
                 query=self.state.task,
                 step=step,
@@ -321,7 +325,7 @@ class Agent(BaseAgent):
         for step in range(self.state.max_steps):
             self.state.step = step
 
-            nudge = self._loop_guard.check()
+            nudge = None if self.disable_loop_detection else self._loop_guard.check()
             state_msg = self.context.state(
                 query=self.state.task,
                 step=step,
