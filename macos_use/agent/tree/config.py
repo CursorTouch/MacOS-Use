@@ -12,5 +12,6 @@ from macos_use.ax.enums import (
     INTERACTIVE_ACTIONS,
     WINDOW_CONTROL_SUBROLES,
     SCROLLABLE_ROLES,
+    CONTAINER_ROLES,
     Action as Actions,
 )
