@@ -9,7 +9,8 @@ from macos_use.agent.registry.views import ToolResult
 from macos_use.agent.desktop.service import Desktop
 from macos_use.agent.desktop.views import Browser
 from macos_use.agent.prompt.service import Prompt
-from macos_use.llms.base import BaseChatLLM
+from macos_use.providers.base import BaseChatLLM
+from macos_use.providers.events import LLMEventType
 from macos_use.agent.base import BaseAgent
 from contextlib import nullcontext
 from rich.console import Console
@@ -158,35 +159,30 @@ class Agent(BaseAgent):
         """Call the LLM and return the response message.
 
         Retries up to max_consecutive_failures times with exponential backoff on failure.
-
-        Returns:
-            The LLM response as a ToolMessage or AIMessage.
-
-        Raises:
-            ValueError: If the LLM returns an unexpected response type.
-            Exception: If all retry attempts are exhausted.
         """
         max_attempts = self.state.max_consecutive_failures
         last_error = None
 
         for attempt in range(max_attempts):
             try:
-                llm_response = self.llm.invoke(messages=self.state.messages+self.state.error_messages, tools=self.tools)
-                content = llm_response.content
-
-                if content is None:
-                    raise ValueError(
-                        f"LLM returned None content (provider: {self.llm.provider}, "
-                        f"model: {self.llm.model_name})"
-                    )
-
-                if not isinstance(content, (ToolMessage, AIMessage)):
-                    raise ValueError(
-                        f"LLM returned unexpected content type: {type(content).__name__}. "
-                        f"Expected ToolMessage or AIMessage."
-                    )
-                self.state.error_messages.clear()
-                return content
+                llm_event = self.llm.invoke(messages=self.state.messages + self.state.error_messages, tools=self.tools)
+                match llm_event.type:
+                    case LLMEventType.TOOL_CALL:
+                        self.state.error_messages.clear()
+                        return ToolMessage(
+                            id=llm_event.tool_call.id,
+                            name=llm_event.tool_call.name,
+                            params=llm_event.tool_call.params,
+                            thinking=llm_event.thinking.content if llm_event.thinking else None,
+                            thinking_signature=llm_event.thinking.signature if llm_event.thinking else None,
+                        )
+                    case LLMEventType.TEXT:
+                        ai_message = AIMessage(content=llm_event.content)
+                        human_message = HumanMessage(
+                            content="Response rejected, please use a tool to respond to the user."
+                        )
+                        self.state.error_messages.extend([ai_message, human_message])
+                        continue
             except Exception as e:
                 last_error = e
                 if attempt < max_attempts - 1:

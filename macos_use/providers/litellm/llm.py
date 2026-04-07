@@ -4,10 +4,11 @@ import logging
 from typing import Iterator, AsyncIterator, List, Optional, Any, overload
 import litellm
 from pydantic import BaseModel
-from macos_use.llms.base import BaseChatLLM
-from macos_use.llms.views import ChatLLMResponse, ChatLLMUsage, Metadata
+from macos_use.providers.base import BaseChatLLM
+from macos_use.providers.views import TokenUsage, Metadata
 from macos_use.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ImageMessage, ToolMessage
 from macos_use.tool import Tool
+from macos_use.providers.events import LLMEvent, LLMEventType, LLMStreamEvent, LLMStreamEventType, ToolCall, Thinking
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +99,19 @@ class ChatLiteLLM(BaseChatLLM):
                     })
                 converted.append({"role": "user", "content": content_list})
             elif isinstance(msg, AIMessage):
-                converted.append({"role": "assistant", "content": msg.content or ""})
+                msg_dict: dict = {"role": "assistant", "content": msg.content or ""}
+                thinking = getattr(msg, "thinking", None)
+                if thinking:
+                    # OpenAI/o1, Groq, etc.: reasoning_content
+                    msg_dict["reasoning_content"] = thinking
+                    # Anthropic: thinking_blocks (required for multi-turn with tools)
+                    sig = getattr(msg, "thinking_signature", None) or ""
+                    if isinstance(sig, bytes):
+                        sig = sig.decode("utf-8", errors="replace")
+                    msg_dict["thinking_blocks"] = [
+                        {"type": "thinking", "thinking": thinking, "signature": sig}
+                    ]
+                converted.append(msg_dict)
             elif isinstance(msg, ToolMessage):
                 # Reconstruct the tool call and result for history consistency
                 tool_call = {
@@ -109,11 +122,17 @@ class ChatLiteLLM(BaseChatLLM):
                         "arguments": json.dumps(msg.params),
                     },
                 }
-                converted.append({
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [tool_call],
-                })
+                asst_msg: dict = {"role": "assistant", "content": None, "tool_calls": [tool_call]}
+                thinking = getattr(msg, "thinking", None)
+                if thinking:
+                    asst_msg["reasoning_content"] = thinking
+                    sig = getattr(msg, "thinking_signature", None) or ""
+                    if isinstance(sig, bytes):
+                        sig = sig.decode("utf-8", errors="replace")
+                    asst_msg["thinking_blocks"] = [
+                        {"type": "thinking", "thinking": thinking, "signature": sig}
+                    ]
+                converted.append(asst_msg)
                 converted.append({
                     "role": "tool",
                     "tool_call_id": msg.id,
@@ -167,7 +186,7 @@ class ChatLiteLLM(BaseChatLLM):
 
         return params
 
-    def _extract_usage(self, usage_data: Any) -> ChatLLMUsage:
+    def _extract_usage(self, usage_data: Any) -> TokenUsage:
         """
         Extract usage information from a LiteLLM response.
         """
@@ -176,10 +195,12 @@ class ChatLiteLLM(BaseChatLLM):
         total_tokens = getattr(usage_data, "total_tokens", 0) or 0
 
         # Extract reasoning/thinking tokens if available
-        reasoning_tokens = None
+        thinking_tokens = None
         if hasattr(usage_data, "completion_tokens_details") and usage_data.completion_tokens_details:
-            reasoning_tokens = getattr(
+            thinking_tokens = getattr(
                 usage_data.completion_tokens_details, "reasoning_tokens", None
+            ) or getattr(
+                usage_data.completion_tokens_details, "thinking_tokens", None
             )
 
         # Extract cache tokens if available
@@ -190,18 +211,18 @@ class ChatLiteLLM(BaseChatLLM):
         if hasattr(usage_data, "cache_read_input_tokens"):
             cache_read = getattr(usage_data, "cache_read_input_tokens", None)
 
-        return ChatLLMUsage(
+        return TokenUsage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
-            reasoning_tokens=reasoning_tokens,
+            thinking_tokens=thinking_tokens,
             cache_creation_input_tokens=cache_creation,
             cache_read_input_tokens=cache_read,
         )
 
-    def _process_response(self, response: Any) -> ChatLLMResponse:
+    def _process_response(self, response: Any) -> LLMEvent:
         """
-        Process a LiteLLM response (OpenAI-compatible format) into ChatLLMResponse.
+        Process a LiteLLM response (OpenAI-compatible format) into AIMessage or ToolMessage.
         """
         choice = response.choices[0]
         message = choice.message
@@ -212,6 +233,8 @@ class ChatLiteLLM(BaseChatLLM):
         if hasattr(message, "reasoning_content") and message.reasoning_content:
             thinking = message.reasoning_content
 
+        thinking_obj = Thinking(content=thinking, signature=None) if thinking else None
+
         content = None
         if hasattr(message, "tool_calls") and message.tool_calls:
             tool_call = message.tool_calls[0]
@@ -221,22 +244,19 @@ class ChatLiteLLM(BaseChatLLM):
                 logger.warning(f"Failed to parse tool arguments: {tool_call.function.arguments}")
                 params = {}
 
-            content = ToolMessage(
-                id=tool_call.id,
-                name=tool_call.function.name,
-                params=params,
+            content = LLMEvent(
+                type=LLMEventType.TOOL_CALL,
+                tool_call=ToolCall(
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    params=params
+                ),
+                usage=usage
             )
         else:
-            content = AIMessage(content=message.content or "")
+            content = LLMEvent(type=LLMEventType.TEXT, content=message.content or "", thinking=thinking_obj, usage=usage)
 
-        if thinking and hasattr(content, "thinking"):
-            content.thinking = thinking
-
-        return ChatLLMResponse(
-            content=content,
-            thinking=thinking,
-            usage=usage,
-        )
+        return content
 
     @overload
     def invoke(
@@ -245,7 +265,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse: ...
+    ) -> LLMEvent: ...
 
     def invoke(
         self,
@@ -253,7 +273,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse:
+    ) -> LLMEvent:
         converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools) if tools else None
 
@@ -269,8 +289,9 @@ class ChatLiteLLM(BaseChatLLM):
                 parsed_data = json.loads(content_text)
                 parsed_obj = structured_output(**parsed_data)
 
+                content_dump = parsed_obj.model_dump()
                 usage = self._extract_usage(response.usage) if response.usage else None
-                return ChatLLMResponse(content=parsed_obj, usage=usage)
+                return LLMEvent(type=LLMEventType.TEXT, content=json.dumps(content_dump) if isinstance(content_dump, dict) else str(content_dump), usage=usage)
             except (json.JSONDecodeError, TypeError, ValueError) as e:
                 logger.error(f"Failed to parse structured output: {e}")
                 # Fall through to normal processing
@@ -286,7 +307,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse: ...
+    ) -> LLMEvent: ...
 
     async def ainvoke(
         self,
@@ -294,7 +315,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse:
+    ) -> LLMEvent:
         converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools) if tools else None
 
@@ -309,8 +330,9 @@ class ChatLiteLLM(BaseChatLLM):
                 parsed_data = json.loads(content_text)
                 parsed_obj = structured_output(**parsed_data)
 
+                content_dump = parsed_obj.model_dump()
                 usage = self._extract_usage(response.usage) if response.usage else None
-                return ChatLLMResponse(content=parsed_obj, usage=usage)
+                return LLMEvent(type=LLMEventType.TEXT, content=json.dumps(content_dump) if isinstance(content_dump, dict) else str(content_dump), usage=usage)
             except (json.JSONDecodeError, TypeError, ValueError) as e:
                 logger.error(f"Failed to parse structured output: {e}")
 
@@ -325,7 +347,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> Iterator[ChatLLMResponse]: ...
+    ) -> Iterator[LLMStreamEvent]: ...
 
     def stream(
         self,
@@ -333,7 +355,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> Iterator[ChatLLMResponse]:
+    ) -> Iterator[LLMStreamEvent]:
         converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools) if tools else None
         params = self._build_params(
@@ -346,23 +368,34 @@ class ChatLiteLLM(BaseChatLLM):
         tool_call_id = None
         tool_call_name = None
         tool_call_args = ""
-        final_usage = None
+        usage = None
+
+        text_started = False
+        think_started = False
+        usage = None
 
         for chunk in response:
             if not chunk.choices:
-                # Final chunk may contain usage
-                if hasattr(chunk, "usage") and chunk.usage:
-                    final_usage = self._extract_usage(chunk.usage)
+                if chunk.usage:
+                    usage = self._extract_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
 
-            if hasattr(delta, "content") and delta.content:
-                yield ChatLLMResponse(content=AIMessage(content=delta.content))
-
-            # Handle reasoning/thinking content in stream
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                yield ChatLLMResponse(thinking=delta.reasoning_content)
+                if not think_started:
+                    think_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.THINK_DELTA, content=delta.reasoning_content)
+
+            if hasattr(delta, "content") and delta.content:
+                if think_started:
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+                    think_started = False
+                if not text_started:
+                    text_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.TEXT_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_DELTA, content=delta.content)
 
             # Accumulate tool call deltas
             if hasattr(delta, "tool_calls") and delta.tool_calls:
@@ -378,15 +411,23 @@ class ChatLiteLLM(BaseChatLLM):
         # Yield accumulated tool call as final response
         if tool_call_id and tool_call_name:
             try:
-                tool_params = json.loads(tool_call_args)
+                params = json.loads(tool_call_args)
             except json.JSONDecodeError:
-                tool_params = {}
-            yield ChatLLMResponse(
-                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
-                usage=final_usage
+                params = {}
+                
+            yield LLMStreamEvent(
+                type=LLMStreamEventType.TOOL_CALL,
+                tool_call=ToolCall(
+                    id=tool_call_id,
+                    name=tool_call_name,
+                    params=params
+                )
             )
-        elif final_usage:
-            yield ChatLLMResponse(usage=final_usage)
+        else:
+            if think_started:
+                yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+            if text_started:
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_END, usage=usage)
 
     @overload
     async def astream(
@@ -395,7 +436,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> AsyncIterator[ChatLLMResponse]: ...
+    ) -> AsyncIterator[LLMStreamEvent]: ...
 
     async def astream(
         self,
@@ -403,7 +444,7 @@ class ChatLiteLLM(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> AsyncIterator[ChatLLMResponse]:
+    ) -> AsyncIterator[LLMStreamEvent]:
         converted_messages = self._convert_messages(messages)
         converted_tools = self._convert_tools(tools) if tools else None
         params = self._build_params(
@@ -416,21 +457,34 @@ class ChatLiteLLM(BaseChatLLM):
         tool_call_id = None
         tool_call_name = None
         tool_call_args = ""
-        final_usage = None
+        usage = None
+
+        text_started = False
+        think_started = False
+        usage = None
 
         async for chunk in response:
             if not chunk.choices:
-                if hasattr(chunk, "usage") and chunk.usage:
-                    final_usage = self._extract_usage(chunk.usage)
+                if chunk.usage:
+                    usage = self._extract_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
 
-            if hasattr(delta, "content") and delta.content:
-                yield ChatLLMResponse(content=AIMessage(content=delta.content))
-
             if hasattr(delta, "reasoning_content") and delta.reasoning_content:
-                yield ChatLLMResponse(thinking=delta.reasoning_content)
+                if not think_started:
+                    think_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.THINK_DELTA, content=delta.reasoning_content)
+
+            if hasattr(delta, "content") and delta.content:
+                if think_started:
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+                    think_started = False
+                if not text_started:
+                    text_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.TEXT_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_DELTA, content=delta.content)
 
             # Accumulate tool call deltas
             if hasattr(delta, "tool_calls") and delta.tool_calls:
@@ -446,15 +500,24 @@ class ChatLiteLLM(BaseChatLLM):
         # Yield accumulated tool call as final response
         if tool_call_id and tool_call_name:
             try:
-                tool_params = json.loads(tool_call_args)
+                params = json.loads(tool_call_args)
             except json.JSONDecodeError:
-                tool_params = {}
-            yield ChatLLMResponse(
-                content=ToolMessage(id=tool_call_id, name=tool_call_name, params=tool_params),
-                usage=final_usage
+                params = {}
+                
+            yield LLMStreamEvent(
+                type=LLMStreamEventType.TOOL_CALL,
+                tool_call=ToolCall(
+                    id=tool_call_id,
+                    name=tool_call_name,
+                    params=params
+                ),
+                usage=usage
             )
-        elif final_usage:
-            yield ChatLLMResponse(usage=final_usage)
+        else:
+            if think_started:
+                yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+            if text_started:
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_END, usage=usage)
 
     def get_metadata(self) -> Metadata:
         # Try to get model info from LiteLLM's model registry

@@ -5,10 +5,12 @@ from typing import Iterator, AsyncIterator, List, Optional, Any, overload
 from google import genai
 from google.genai import types
 from pydantic import BaseModel
-from macos_use.llms.base import BaseChatLLM
-from macos_use.llms.views import ChatLLMResponse, ChatLLMUsage, Metadata
+from macos_use.providers.base import BaseChatLLM
+from macos_use.providers.views import TokenUsage, Metadata
 from macos_use.messages import BaseMessage, SystemMessage, HumanMessage, AIMessage, ImageMessage, ToolMessage
 from macos_use.tool import Tool
+import json
+from macos_use.providers.events import LLMEvent, LLMEventType, LLMStreamEvent, LLMStreamEventType, ToolCall, Thinking
 
 logger = logging.getLogger(__name__)
 
@@ -220,16 +222,16 @@ class ChatGoogle(BaseChatLLM):
 
         return types.GenerateContentConfig(**config_params)
 
-    def _extract_usage(self, usage_metadata: Any) -> ChatLLMUsage:
+    def _extract_usage(self, usage_metadata: Any) -> TokenUsage:
         """
         Extract usage information from the response metadata.
         """
         if not usage_metadata:
-            return ChatLLMUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+            return TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
         thinking_tokens = getattr(usage_metadata, "thoughts_token_count", None)
 
-        return ChatLLMUsage(
+        return TokenUsage(
             prompt_tokens=usage_metadata.prompt_token_count or 0,
             completion_tokens=usage_metadata.candidates_token_count or 0,
             total_tokens=usage_metadata.total_token_count or 0,
@@ -250,9 +252,46 @@ class ChatGoogle(BaseChatLLM):
             pass
         return "\n".join(thinking_parts) if thinking_parts else None
 
-    def _process_response(self, response: Any) -> ChatLLMResponse:
+    def _extract_text(self, response: Any) -> str:
         """
-        Process Google Gemini API response into ChatLLMResponse object.
+        Extract text content from response parts, excluding thought parts.
+
+        Uses candidates[0].content.parts directly to avoid the SDK warning when
+        response.text is accessed on responses containing non-text parts
+        (e.g. thought_signature from Gemini thinking models).
+        """
+        text_parts: list[str] = []
+        try:
+            if response.candidates and response.candidates[0].content:
+                for part in response.candidates[0].content.parts:
+                    if getattr(part, "thought", False):
+                        continue
+                    if hasattr(part, "text") and part.text:
+                        text_parts.append(part.text)
+        except (AttributeError, IndexError):
+            pass
+        return "".join(text_parts) if text_parts else ""
+
+    def _extract_text_from_chunk(self, chunk: Any) -> str:
+        """
+        Extract text from a stream chunk, excluding thought parts.
+        Avoids SDK warning when chunk.text is accessed on chunks with thought_signature.
+        """
+        text_parts: list[str] = []
+        try:
+            if chunk.candidates and chunk.candidates[0].content:
+                for part in chunk.candidates[0].content.parts:
+                    if getattr(part, "thought", False):
+                        continue
+                    if hasattr(part, "text") and part.text:
+                        text_parts.append(part.text)
+        except (AttributeError, IndexError):
+            pass
+        return "".join(text_parts) if text_parts else ""
+
+    def _process_response(self, response: Any) -> LLMEvent:
+        """
+        Process Google Gemini API response into LLMEvent.
         """
         usage = self._extract_usage(response.usage_metadata)
 
@@ -261,40 +300,23 @@ class ChatGoogle(BaseChatLLM):
         if function_calls:
             fc = function_calls[0]
             fc_id = getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
-
-            content = ToolMessage(
-                id=fc_id,
-                name=fc.name,
-                params=dict(fc.args) if fc.args else {},
+            return LLMEvent(
+                type=LLMEventType.TOOL_CALL,
+                tool_call=ToolCall(
+                    id=fc_id,
+                    name=fc.name,
+                    params=dict(fc.args) if fc.args else {}
+                ),
+                usage=usage
             )
 
-            thinking = self._extract_thinking(response)
-            if thinking:
-                content.thinking = thinking
+        # Handle regular text response (use _extract_text to avoid SDK warning
+        # when response contains non-text parts like thought_signature)
+        text_content = self._extract_text(response)
 
-            return ChatLLMResponse(
-                content=content,
-                thinking=thinking,
-                usage=usage,
-            )
-
-        # Handle regular text response
-        try:
-            text_content = response.text or ""
-        except (ValueError, AttributeError):
-            text_content = ""
-
-        thinking = self._extract_thinking(response)
-
-        content = AIMessage(content=text_content)
-        if thinking:
-            content.thinking = thinking
-
-        return ChatLLMResponse(
-            content=content,
-            thinking=thinking,
-            usage=usage,
-        )
+        thinking_content = self._extract_thinking(response)
+        thinking_obj = Thinking(content=thinking_content, signature=None) if thinking_content else None
+        return LLMEvent(type=LLMEventType.TEXT, content=text_content, thinking=thinking_obj, usage=usage)
 
     @overload
     def invoke(
@@ -303,7 +325,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse: ...
+    ) -> LLMEvent: ...
 
     def invoke(
         self,
@@ -311,7 +333,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse:
+    ) -> LLMEvent:
         system_instruction, contents = self._convert_messages(messages)
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
@@ -323,9 +345,11 @@ class ChatGoogle(BaseChatLLM):
         )
 
         if structured_output:
-            parsed = structured_output.model_validate_json(response.text)
+            text = self._extract_text(response)
+            parsed = structured_output.model_validate_json(text)
             usage = self._extract_usage(response.usage_metadata)
-            return ChatLLMResponse(content=parsed, usage=usage)
+            content = parsed.model_dump() if hasattr(parsed, "model_dump") else str(parsed)
+            return LLMEvent(type=LLMEventType.TEXT, content=json.dumps(content) if isinstance(content, dict) else content, usage=usage)
 
         return self._process_response(response)
 
@@ -336,7 +360,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse: ...
+    ) -> LLMEvent: ...
 
     async def ainvoke(
         self,
@@ -344,7 +368,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> ChatLLMResponse:
+    ) -> LLMEvent:
         system_instruction, contents = self._convert_messages(messages)
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
@@ -356,9 +380,11 @@ class ChatGoogle(BaseChatLLM):
         )
 
         if structured_output:
-            parsed = structured_output.model_validate_json(response.text)
+            text = self._extract_text(response)
+            parsed = structured_output.model_validate_json(text)
             usage = self._extract_usage(response.usage_metadata)
-            return ChatLLMResponse(content=parsed, usage=usage)
+            content = parsed.model_dump() if hasattr(parsed, "model_dump") else str(parsed)
+            return LLMEvent(type=LLMEventType.TEXT, content=json.dumps(content) if isinstance(content, dict) else content, usage=usage)
 
         return self._process_response(response)
 
@@ -369,7 +395,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> Iterator[ChatLLMResponse]: ...
+    ) -> Iterator[LLMStreamEvent]: ...
 
     def stream(
         self,
@@ -377,12 +403,15 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> Iterator[ChatLLMResponse]:
+    ) -> Iterator[LLMStreamEvent]:
         system_instruction, contents = self._convert_messages(messages)
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
 
-        final_usage = None
+        usage = None
+
+        text_started = False
+        think_started = False
 
         for chunk in self.client.models.generate_content_stream(
             model=self._model,
@@ -394,37 +423,46 @@ class ChatGoogle(BaseChatLLM):
                 if chunk.candidates and chunk.candidates[0].content:
                     for part in chunk.candidates[0].content.parts:
                         if getattr(part, "thought", False) and part.text:
-                            yield ChatLLMResponse(thinking=part.text)
+                            if not think_started:
+                                think_started = True
+                                yield LLMStreamEvent(type=LLMStreamEventType.THINK_START)
+                            yield LLMStreamEvent(type=LLMStreamEventType.THINK_DELTA, content=part.text)
                         # Detect function calls in stream
                         fc = getattr(part, "function_call", None)
                         if fc:
-                            fc_id = getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                            fc_id = f"call_{uuid.uuid4().hex[:8]}"
                             tool_params = dict(fc.args) if fc.args else {}
-                            thinking = self._extract_thinking(chunk)
-                            content = ToolMessage(id=fc_id, name=fc.name, params=tool_params)
-                            if thinking:
-                                content.thinking = thinking
-                            yield ChatLLMResponse(
-                                content=content,
-                                thinking=thinking,
-                                usage=self._extract_usage(chunk.usage_metadata) if chunk.usage_metadata else None,
+                            chunk_usage = self._extract_usage(chunk.usage_metadata) if hasattr(chunk, "usage_metadata") and chunk.usage_metadata else usage
+                            yield LLMStreamEvent(
+                                type=LLMStreamEventType.TOOL_CALL,
+                                tool_call=ToolCall(
+                                    id=fc_id,
+                                    name=fc.name,
+                                    params=tool_params
+                                ),
+                                usage=chunk_usage
                             )
             except (AttributeError, IndexError):
                 pass
 
-            # Yield text content (chunk.text excludes thought parts)
-            try:
-                if chunk.text:
-                    yield ChatLLMResponse(content=AIMessage(content=chunk.text))
-            except (AttributeError, ValueError):
-                pass
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                usage = self._extract_usage(chunk.usage_metadata)
 
-            # Track usage on final chunk
-            if chunk.usage_metadata and chunk.usage_metadata.total_token_count:
-                final_usage = self._extract_usage(chunk.usage_metadata)
+            # Yield text content (use _extract_text_from_chunk to avoid SDK warning)
+            text_content = self._extract_text_from_chunk(chunk)
+            if text_content:
+                if think_started:
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+                    think_started = False
+                if not text_started:
+                    text_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.TEXT_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_DELTA, content=text_content)
 
-        if final_usage:
-            yield ChatLLMResponse(usage=final_usage)
+        if think_started:
+            yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+        if text_started:
+            yield LLMStreamEvent(type=LLMStreamEventType.TEXT_END, usage=usage)
 
     @overload
     async def astream(
@@ -433,7 +471,7 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> AsyncIterator[ChatLLMResponse]: ...
+    ) -> AsyncIterator[LLMStreamEvent]: ...
 
     async def astream(
         self,
@@ -441,12 +479,15 @@ class ChatGoogle(BaseChatLLM):
         tools: list[Tool] = [],
         structured_output: BaseModel | None = None,
         json_mode: bool = False,
-    ) -> AsyncIterator[ChatLLMResponse]:
+    ) -> AsyncIterator[LLMStreamEvent]:
         system_instruction, contents = self._convert_messages(messages)
         google_tools = self._convert_tools(tools) if tools else None
         config = self._build_config(system_instruction, google_tools, structured_output, json_mode)
 
-        final_usage = None
+        usage = None
+
+        text_started = False
+        think_started = False
 
         async for chunk in await self.client.aio.models.generate_content_stream(
             model=self._model,
@@ -458,37 +499,46 @@ class ChatGoogle(BaseChatLLM):
                 if chunk.candidates and chunk.candidates[0].content:
                     for part in chunk.candidates[0].content.parts:
                         if getattr(part, "thought", False) and part.text:
-                            yield ChatLLMResponse(thinking=part.text)
+                            if not think_started:
+                                think_started = True
+                                yield LLMStreamEvent(type=LLMStreamEventType.THINK_START)
+                            yield LLMStreamEvent(type=LLMStreamEventType.THINK_DELTA, content=part.text)
                         # Detect function calls in stream
                         fc = getattr(part, "function_call", None)
                         if fc:
-                            fc_id = getattr(fc, "id", None) or f"call_{uuid.uuid4().hex[:8]}"
+                            fc_id = f"call_{uuid.uuid4().hex[:8]}"
                             tool_params = dict(fc.args) if fc.args else {}
-                            thinking = self._extract_thinking(chunk)
-                            content = ToolMessage(id=fc_id, name=fc.name, params=tool_params)
-                            if thinking:
-                                content.thinking = thinking
-                            yield ChatLLMResponse(
-                                content=content,
-                                thinking=thinking,
-                                usage=self._extract_usage(chunk.usage_metadata) if chunk.usage_metadata else None,
+                            chunk_usage = self._extract_usage(chunk.usage_metadata) if hasattr(chunk, "usage_metadata") and chunk.usage_metadata else usage
+                            yield LLMStreamEvent(
+                                type=LLMStreamEventType.TOOL_CALL,
+                                tool_call=ToolCall(
+                                    id=fc_id,
+                                    name=fc.name,
+                                    params=tool_params
+                                ),
+                                usage=chunk_usage
                             )
             except (AttributeError, IndexError):
                 pass
 
-            # Yield text content (chunk.text excludes thought parts)
-            try:
-                if chunk.text:
-                    yield ChatLLMResponse(content=AIMessage(content=chunk.text))
-            except (AttributeError, ValueError):
-                pass
+            if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                usage = self._extract_usage(chunk.usage_metadata)
 
-            # Track usage on final chunk
-            if chunk.usage_metadata and chunk.usage_metadata.total_token_count:
-                final_usage = self._extract_usage(chunk.usage_metadata)
+            # Yield text content (use _extract_text_from_chunk to avoid SDK warning)
+            text_content = self._extract_text_from_chunk(chunk)
+            if text_content:
+                if think_started:
+                    yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+                    think_started = False
+                if not text_started:
+                    text_started = True
+                    yield LLMStreamEvent(type=LLMStreamEventType.TEXT_START)
+                yield LLMStreamEvent(type=LLMStreamEventType.TEXT_DELTA, content=text_content)
 
-        if final_usage:
-            yield ChatLLMResponse(usage=final_usage)
+        if think_started:
+            yield LLMStreamEvent(type=LLMStreamEventType.THINK_END)
+        if text_started:
+            yield LLMStreamEvent(type=LLMStreamEventType.TEXT_END, usage=usage)
 
     def get_metadata(self) -> Metadata:
         context_window = 1048576  # Default for Gemini 2.x models (1M tokens)

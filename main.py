@@ -1,6 +1,6 @@
-from macos_use.llms.anthropic import ChatAnthropic
-from macos_use.llms.ollama import ChatOllama
-from macos_use.llms.groq import ChatGroq
+from macos_use.providers.anthropic import ChatAnthropic
+from macos_use.providers.ollama import ChatOllama
+from macos_use.providers.groq import ChatGroq
 from macos_use.agent import Agent
 from dotenv import load_dotenv
 
