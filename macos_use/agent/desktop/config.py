@@ -2,7 +2,7 @@
 Configuration constants for macOS desktop module.
 """
 
-# Browser bundle identifiers for detection
+# Bundle IDs for known browser applications
 BROWSER_BUNDLE_IDS = {
     'com.apple.Safari',
     'com.google.Chrome',
@@ -10,28 +10,21 @@ BROWSER_BUNDLE_IDS = {
     'com.microsoft.edgemac',
     'com.brave.Browser',
     'com.operasoftware.Opera',
+    'com.vivaldi.Vivaldi',
+    'company.thebrowser.Browser',  # Arc
 }
 
-# Application names to avoid (internal/system)
-AVOIDED_APPS: set[str] = {
-    'Finder',  # Usually always running but not always relevant
+# Bundle IDs for applications to exclude from window listing
+EXCLUDED_BUNDLE_IDS = {
+    'com.apple.finder',           # Finder (always running, often background)
 }
 
-# System processes to exclude from window listing
-EXCLUDED_BUNDLE_IDS: set[str] = {
-    "com.apple.loginwindow",
-    "com.apple.dock",
-    "com.apple.systemuiserver",
-    "com.apple.controlcenter",
-    "com.apple.notificationcenterui",
-    "com.apple.Spotlight",
-    "com.apple.ScreenSaver.Engine",
-    "com.apple.WindowManager",
-    "com.apple.TextInputMenuBar",
-    "com.apple.TextInputMenuAgent",
-    "com.apple.AirPlayUIAgent",
-    "com.apple.PowerChime",
-    "com.apple.BezelServices",
+# System UI apps to include in accessibility tree (whitelist).
+SYSTEM_UI_BUNDLE_IDS = {
+    'com.apple.dock',
+    'com.apple.controlcenter',
+    'com.apple.systemuiserver',
+    'com.apple.Spotlight',
 }
 
 # Max image dimensions for screenshots

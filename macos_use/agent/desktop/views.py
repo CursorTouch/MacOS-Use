@@ -1,10 +1,10 @@
 """
 Data classes for representing macOS desktop state.
 """
-from macos_use.agent.tree.views import TreeState, BoundingBox
+from macos_use.agent.tree.views import BoundingBox, TreeState
 from dataclasses import dataclass
 from tabulate import tabulate
-from typing import Optional
+from typing import Optional, Union
 from PIL.Image import Image
 from enum import Enum
 
@@ -25,32 +25,13 @@ class Browser(Enum):
 
 
 class Status(Enum):
-    """Window status enumeration."""
-    NORMAL = 'Normal'
-    MINIMIZED = 'Minimized'
-    FULL_SCREEN = 'FullScreen'
+    """Window/application status enumeration."""
+    ACTIVE = 'Active'
+    FULLSCREEN = 'Fullscreen'
+    VISIBLE = 'Visible'
     HIDDEN = 'Hidden'
-
-
-@dataclass
-class Window:
-    """Represents a macOS window."""
-    name: str
-    is_browser: bool
-    status: Status
-    bounding_box: BoundingBox
-    pid: int
-    bundle_id: str = ''
-    
-    def to_row(self) -> list:
-        """Convert to a table row for display."""
-        return [
-            self.name, 
-            self.status.value, 
-            int(self.bounding_box.width), 
-            int(self.bounding_box.height), 
-            self.bundle_id
-        ]
+    MINIMIZED = 'Minimized'
+    WINDOWLESS = 'Windowless'
 
 
 @dataclass
@@ -64,11 +45,32 @@ class Size:
 
 
 @dataclass
+class Window:
+    """Represents a macOS window."""
+    name: str
+    is_browser: bool
+    status: Status
+    bounding_box: BoundingBox
+    pid: int
+    bundle_id: str = ''
+
+    def to_row(self) -> list:
+        """Convert to a table row for display."""
+        return [
+            self.name,
+            self.status.value,
+            int(self.bounding_box.width),
+            int(self.bounding_box.height),
+            self.bundle_id,
+        ]
+
+
+@dataclass
 class DesktopState:
     """Represents the complete state of the macOS desktop."""
     active_window: Optional[Window]
-    windows: list[Window]
-    screenshot: Optional[Image] = None
+    windows: list
+    screenshot: Union[Image, bytes, None] = None
     tree_state: Optional[TreeState] = None
 
     def active_window_to_string(self) -> str:
