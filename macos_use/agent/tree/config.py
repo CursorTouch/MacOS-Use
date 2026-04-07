@@ -1,17 +1,93 @@
-"""
-Configuration constants for macOS accessibility tree traversal.
-Re-exports from the centralized ax module for backward compatibility.
 
-All constants are now defined in macos_use.ax.enums and re-exported here
-so existing code that imports from tree.config continues to work.
-"""
+# Interactive roles - elements that users can interact with
+INTERACTIVE_ROLES = {
+    'AXButton',
+    'AXCheckBox',
+    'AXRadioButton',
+    'AXTextField',
+    'AXTextArea',
+    'AXComboBox',
+    'AXPopUpButton',
+    'AXSlider',
+    'AXIncrementor',
+    # 'AXImage',
+    'AXLink',
+    'AXMenuItem',
+    'AXMenuButton',
+    'AXMenuBarItem',
+    'AXTab',
+    'AXDockItem',
+    'AXCell',
+    # 'AXRow',
+    'AXToggle',
+    'AXSwitch',
+    'AXDisclosureTriangle',
+    'AXColorWell',
+    'AXLevelIndicator',
+    'AXValueIndicator',
+}
 
-from macos_use.ax.enums import (
-    INTERACTIVE_ROLES,
-    NON_INTERACTIVE_ROLES,
-    INTERACTIVE_ACTIONS,
-    WINDOW_CONTROL_SUBROLES,
-    SCROLLABLE_ROLES,
-    CONTAINER_ROLES,
-    Action as Actions,
-)
+# Container roles - elements that hold other elements
+CONTAINER_ROLES = {
+    'AXWindow',
+    'AXToolbar',
+    'AXGroup',
+    'AXScrollArea',
+    'AXSplitGroup',
+    'AXList',
+    'AXTabGroup',
+    'AXWebArea',
+    'AXPopover',
+    'AXSheet',
+    'AXLayoutArea',
+    'AXLayoutItem',
+}
+
+# Non-interactive roles - informational elements
+NON_INTERACTIVE_ROLES = {
+    'AXList',
+    'AXMenuBar',
+    'AXMenu',
+    'AXGroup',
+    'AXScrollArea',
+    'AXStaticText',
+    'AXRadioGroup',
+    'AXGrid',
+    'AXApplication',
+    'AXWindow',
+    'AXToolbar',
+    'AXSplitGroup',
+    'AXTabGroup',
+    'AXWebArea',
+}
+
+# Scrollable roles - elements that can be scrolled
+SCROLLABLE_ROLES = {
+    'AXScrollArea',
+    'AXScrollView',
+    'AXTable',
+    'AXList',
+    'AXOutline',
+    'AXBrowser',
+    'AXTextArea',
+}
+
+# Actions that indicate an element is interactive
+INTERACTIVE_ACTIONS = {
+    'AXPress',
+    'AXConfirm',
+    'AXCancel',
+    'AXIncrement',
+    'AXDecrement',
+    'AXShowMenu',
+    'AXPick',
+    'AXRaise',
+}
+
+# Window control subroles with friendly names
+WINDOW_CONTROL_SUBROLES = {
+    'AXCloseButton': 'Close Button',
+    'AXMinimizeButton': 'Minimize Button',
+    'AXZoomButton': 'Zoom Button',
+    'AXFullScreenButton': 'Full Screen Button',
+}

@@ -222,7 +222,7 @@ class _AXClient:
 # Element Creation Functions
 # =============================================================================
 
-def GetRootControl():
+def GetRootControl() -> Any:
     """
     Get the system-wide root accessibility element.
     Equivalent to Windows UIA GetRootControl().
@@ -230,7 +230,7 @@ def GetRootControl():
     return _AXClient.instance().system_wide
 
 
-def ControlFromPID(pid: int):
+def ControlFromPID(pid: int) -> Any:
     """
     Create an accessibility element for the application with the given PID.
     Equivalent to Windows UIA ControlFromHandle().
@@ -251,7 +251,7 @@ def IsAccessibilityEnabledWithPrompt() -> bool:
 
     Returns True if the process is trusted.
     """
-    from CoreFoundation import kCFBooleanTrue
+    from CoreFoundation import CFDictionaryCreate, kCFBooleanTrue
     options = {
         'AXTrustedCheckOptionPrompt': kCFBooleanTrue,
     }
@@ -262,7 +262,7 @@ def IsAccessibilityEnabledWithPrompt() -> bool:
 # Attribute Access Helpers
 # =============================================================================
 
-def GetAttribute(element, attribute: str):
+def GetAttribute(element: Any, attribute: str) -> Optional[Any]:
     """
     Get an attribute value from an AXUIElement.
     Returns None if the attribute is not available or an error occurs.
@@ -276,7 +276,7 @@ def GetAttribute(element, attribute: str):
     return None
 
 
-def SetAttribute(element, attribute: str, value) -> bool:
+def SetAttribute(element: Any, attribute: str, value: Any) -> bool:
     """
     Set an attribute value on an AXUIElement.
     Returns True if successful.
@@ -288,7 +288,7 @@ def SetAttribute(element, attribute: str, value) -> bool:
         return False
 
 
-def IsAttributeSettable(element, attribute: str) -> bool:
+def IsAttributeSettable(element: Any, attribute: str) -> bool:
     """Check if an attribute can be set on an element."""
     try:
         error, settable = AXUIElementIsAttributeSettable(element, attribute, None)
@@ -299,7 +299,7 @@ def IsAttributeSettable(element, attribute: str) -> bool:
     return False
 
 
-def GetAttributeNames(element) -> list:
+def GetAttributeNames(element: Any) -> list[str]:
     """Get all attribute names supported by an element."""
     try:
         error, names = AXUIElementCopyAttributeNames(element, None)
@@ -310,7 +310,7 @@ def GetAttributeNames(element) -> list:
     return []
 
 
-def GetActionNames(element) -> list:
+def GetActionNames(element: Any) -> list[str]:
     """Get all action names supported by an element."""
     try:
         error, names = AXUIElementCopyActionNames(element, None)
@@ -321,7 +321,7 @@ def GetActionNames(element) -> list:
     return []
 
 
-def PerformAction(element, action: str) -> bool:
+def PerformAction(element: Any, action: str) -> bool:
     """
     Perform an action on an AXUIElement.
     Returns True if successful.
@@ -333,7 +333,7 @@ def PerformAction(element, action: str) -> bool:
         return False
 
 
-def GetChildCount(element) -> int:
+def GetChildCount(element: Any) -> int:
     """Get the number of children of an element."""
     try:
         error, count = AXUIElementGetAttributeValueCount(element, Attribute.Children, None)
@@ -344,7 +344,7 @@ def GetChildCount(element) -> int:
     return 0
 
 
-def GetChildren(element) -> list:
+def GetChildren(element: Any) -> list[Any]:
     """Get child elements of an accessibility element."""
     try:
         error, count = AXUIElementGetAttributeValueCount(element, Attribute.Children, None)
@@ -418,7 +418,7 @@ def _parse_ax_size(size_val) -> Optional[Tuple[float, float]]:
     return None
 
 
-def GetPosition(element) -> Optional[Tuple[float, float]]:
+def GetPosition(element: Any) -> Optional[Tuple[float, float]]:
     """Get the position (x, y) of an accessibility element in screen coordinates."""
     error, pos_val = AXUIElementCopyAttributeValue(element, Attribute.Position, None)
     if error != kAXErrorSuccess or pos_val is None:
@@ -426,7 +426,7 @@ def GetPosition(element) -> Optional[Tuple[float, float]]:
     return _parse_ax_position(pos_val)
 
 
-def GetSize(element) -> Optional[Tuple[float, float]]:
+def GetSize(element: Any) -> Optional[Tuple[float, float]]:
     """Get the size (width, height) of an accessibility element."""
     error, size_val = AXUIElementCopyAttributeValue(element, Attribute.Size, None)
     if error != kAXErrorSuccess or size_val is None:
@@ -434,7 +434,7 @@ def GetSize(element) -> Optional[Tuple[float, float]]:
     return _parse_ax_size(size_val)
 
 
-def GetRect(element) -> Optional[Rect]:
+def GetRect(element: Any) -> Optional[Rect]:
     """Get the bounding rectangle of an accessibility element."""
     pos = GetPosition(element)
     size = GetSize(element)
@@ -457,45 +457,6 @@ _TRAVERSAL_ATTRIBUTES = [
     Attribute.Identifier,
     Attribute.Value,
 ]
-
-
-def GetMultipleAttributeValues(
-    element: Any,
-    attributes: Sequence[str],
-    stop_on_error: bool = False,
-) -> dict:
-    """
-    Get multiple attribute values in a single call for better performance.
-    Wraps AXUIElementCopyMultipleAttributeValues.
-
-    Returns a dict mapping attribute names to their values.
-    Attributes with errors are omitted.
-    """
-    try:
-        options = kAXCopyMultipleAttributeOptionStopOnError if stop_on_error else 0
-        error, values = AXUIElementCopyMultipleAttributeValues(
-            element, attributes, options, None
-        )
-        if error == kAXErrorSuccess and values:
-            result = {}
-            for attr, val in zip(attributes, values):
-                if val is None:
-                    continue
-                if isinstance(val, int) and val < 0:
-                    continue
-                # Detect AXValue error objects (kAXValueAXErrorType = 5)
-                if not isinstance(val, (str, bool, int, float, list, dict)):
-                    try:
-                        from ApplicationServices import AXValueGetType
-                        if AXValueGetType(val) == AXValueType.AXError:
-                            continue
-                    except Exception:
-                        pass
-                result[attr] = val
-            return result
-    except Exception:
-        pass
-    return {}
 
 
 def GetTraversalBatch(element: Any) -> dict:
@@ -538,12 +499,111 @@ def GetTraversalBatch(element: Any) -> dict:
     }
 
 
+def ElementAtPosition(application, x: float, y: float):
+    """
+    Get the accessibility element at the specified screen coordinates.
+    Wraps AXUIElementCopyElementAtPosition.
+
+    Args:
+        application: An AXUIElementRef (typically system-wide or application element).
+        x: X coordinate in screen space.
+        y: Y coordinate in screen space.
+
+    Returns:
+        The AXUIElementRef at the position, or None if not found.
+    """
+    try:
+        error, element = AXUIElementCopyElementAtPosition(application, x, y, None)
+        if error == kAXErrorSuccess and element:
+            return element
+    except Exception:
+        pass
+    return None
+
+
+def GetElementPid(element: Any) -> Optional[int]:
+    """
+    Get the process ID of the application that owns the given element.
+    Wraps AXUIElementGetPid.
+
+    Args:
+        element: An AXUIElementRef.
+
+    Returns:
+        The PID of the owning application, or None on error.
+    """
+    try:
+        error, pid = AXUIElementGetPid(element, None)
+        if error == kAXErrorSuccess:
+            return pid
+    except Exception:
+        pass
+    return None
+
+
+def GetMultipleAttributeValues(
+    element: Any,
+    attributes: Sequence[str],
+    stop_on_error: bool = False,
+) -> dict[str, Any]:
+    """
+    Get multiple attribute values in a single call for better performance.
+    Wraps AXUIElementCopyMultipleAttributeValues.
+
+    Args:
+        element: An AXUIElementRef.
+        attributes: List of attribute name strings (e.g., [Attribute.Role, Attribute.Title]).
+        stop_on_error: If True, stops fetching when an error is encountered.
+
+    Returns:
+        Dictionary mapping attribute names to their values.
+        Attributes with errors are omitted.
+    """
+    try:
+        options = kAXCopyMultipleAttributeOptionStopOnError if stop_on_error else 0
+        error, values = AXUIElementCopyMultipleAttributeValues(
+            element, attributes, options, None
+        )
+        if error == kAXErrorSuccess and values:
+            result = {}
+            for attr, val in zip(attributes, values):
+                # AXUIElementCopyMultipleAttributeValues returns kAXErrorSuccess overall,
+                # but per-attribute errors are embedded in the array as either negative
+                # ints or AXValue objects of type kAXValueAXErrorType (5).
+                if val is None:
+                    continue
+                if isinstance(val, int) and val < 0:
+                    continue
+                # Detect AXValue error objects (kAXValueAXErrorType = 5)
+                if not isinstance(val, (str, bool, int, float, list, dict)):
+                    try:
+                        from ApplicationServices import AXValueGetType
+                        if AXValueGetType(val) == AXValueType.AXError:
+                            continue
+                    except Exception:
+                        pass
+                result[attr] = val
+            return result
+    except Exception:
+        pass
+    return {}
+
+
 def GetAttributeValues(
     element: Any, attribute: str, index: int, max_values: int
-) -> list:
+) -> list[Any]:
     """
     Get a range of values for an array attribute (paginated access).
     Wraps AXUIElementCopyAttributeValues.
+
+    Args:
+        element: An AXUIElementRef.
+        attribute: Attribute name (e.g., Attribute.Children).
+        index: Starting index.
+        max_values: Maximum number of values to return.
+
+    Returns:
+        List of attribute values, or empty list on error.
     """
     try:
         error, values = AXUIElementCopyAttributeValues(
@@ -560,6 +620,13 @@ def GetActionDescription(element: Any, action: str) -> str:
     """
     Get a localized description of a specific action.
     Wraps AXUIElementCopyActionDescription.
+
+    Args:
+        element: An AXUIElementRef.
+        action: Action name (e.g., Action.Press).
+
+    Returns:
+        Localized description string, or empty string on error.
     """
     try:
         error, description = AXUIElementCopyActionDescription(element, action, None)
@@ -574,6 +641,14 @@ def SetMessagingTimeout(element: Any, timeout: float) -> bool:
     """
     Set the messaging timeout for an accessibility element.
     Controls how long the API waits for a response from the target application.
+    Wraps AXUIElementSetMessagingTimeout.
+
+    Args:
+        element: An AXUIElementRef.
+        timeout: Timeout in seconds (0 resets to default).
+
+    Returns:
+        True if successful.
     """
     try:
         error = AXUIElementSetMessagingTimeout(element, timeout)
@@ -590,36 +665,14 @@ def GetMessagingTimeout(element: Any) -> Optional[float]:
     Get the current messaging timeout for an accessibility element.
     Note: macOS has no public API to retrieve this value, so we return
     the last value set via SetMessagingTimeout, or None if never set.
+
+    Args:
+        element: An AXUIElementRef.
+
+    Returns:
+        Timeout in seconds, or None if not previously set.
     """
     return _messaging_timeouts.get(id(element))
-
-
-def ElementAtPosition(application: Any, x: float, y: float) -> Any:
-    """
-    Get the accessibility element at the specified screen coordinates.
-    Wraps AXUIElementCopyElementAtPosition.
-    """
-    try:
-        error, element = AXUIElementCopyElementAtPosition(application, x, y, None)
-        if error == kAXErrorSuccess and element:
-            return element
-    except Exception:
-        pass
-    return None
-
-
-def GetElementPid(element: Any) -> Optional[int]:
-    """
-    Get the process ID of the application that owns the given element.
-    Wraps AXUIElementGetPid.
-    """
-    try:
-        error, pid = AXUIElementGetPid(element, None)
-        if error == kAXErrorSuccess:
-            return pid
-    except Exception:
-        pass
-    return None
 
 
 # =============================================================================
@@ -657,8 +710,9 @@ def GetScreenSize() -> Tuple[int, int]:
 
     # Fallback to main display
     main_display = CGMainDisplayID()
-    width = CGDisplayPixelsWide(main_display)
-    height = CGDisplayPixelsHigh(main_display)
+    mode = CGDisplayCopyDisplayMode(main_display)
+    width = CGDisplayModeGetPixelWidth(mode) if mode else CGDisplayPixelsWide(main_display)
+    height = CGDisplayModeGetPixelHeight(mode) if mode else CGDisplayPixelsHigh(main_display)
     return (width, height)
 
 
@@ -719,7 +773,7 @@ def GetDPIScale() -> float:
     return 1.0
 
 
-def GetPerDisplayInfo() -> list:
+def GetPerDisplayInfo() -> list[dict]:
     """
     Get per-display geometry and scale information.
 
@@ -1113,7 +1167,7 @@ def _type_unicode_char(char: str) -> None:
 # Window Functions
 # =============================================================================
 
-def GetWindowList(on_screen_only: bool = True) -> list:
+def GetWindowList(on_screen_only: bool = True) -> list["ApplicationControl"]:
     """
     Get list of window info dictionaries from the window server.
     Returns raw CGWindowListCopyWindowInfo results.
@@ -1149,7 +1203,7 @@ def GetForegroundWindowPID() -> Optional[int]:
     return None
 
 
-def _GetRunningApplicationsRaw() -> list:
+def _GetRunningApplicationsRaw() -> list[Any]:
     """Get all running applications from NSWorkspace (raw NSRunningApplication objects)."""
     return list(NSWorkspace.sharedWorkspace().runningApplications())
 
@@ -1157,172 +1211,6 @@ def _GetRunningApplicationsRaw() -> list:
 def _GetFrontmostApplicationRaw() -> Any:
     """Get the frontmost application from NSWorkspace (raw NSRunningApplication)."""
     return NSWorkspace.sharedWorkspace().frontmostApplication()
-
-
-def GetRunningApplications(
-    policy: Optional[str] = None,
-    status: Optional[str] = None,
-) -> list:
-    """
-    Get running applications as ApplicationControl objects with optional filtering.
-
-    Args:
-        policy: Filter by activation policy.
-            'Regular'           — Normal apps (Dock + App Switcher).
-            'Accessory'         — Menu bar items, helpers (no Dock icon).
-            'Prohibited'        — Background agents/daemons.
-            'Regular+Accessory' — Combine with '+' for OR matching.
-            None                — Return all (default).
-        status: Filter by current status.
-            'Active', 'Visible', 'Hidden', 'Minimized', 'Windowless'.
-            Combine with '+' for OR matching. None — Return all.
-
-    Returns:
-        List of ApplicationControl matching the filters.
-    """
-    from .controls import ApplicationControl
-    raw_apps = NSWorkspace.sharedWorkspace().runningApplications()
-    apps = [ApplicationControl(pid=a.processIdentifier()) for a in raw_apps]
-
-    if policy is not None:
-        policies = {p.strip() for p in policy.split('+')}
-        apps = [a for a in apps if a.ActivationPolicy in policies]
-    if status is not None:
-        statuses = {s.strip() for s in status.split('+')}
-        apps = [a for a in apps if a.Status in statuses]
-
-    return apps
-
-
-def GetFrontmostApplication() -> Optional["ApplicationControl"]:
-    """
-    Get the frontmost application as an ApplicationControl.
-
-    Uses CGWindowListCopyWindowInfo (window server) instead of
-    NSWorkspace.frontmostApplication() because NSWorkspace relies on
-    AppKit notifications delivered via NSRunLoop. Without an active
-    event loop (e.g. Python scripts, notebooks), NSWorkspace returns
-    stale cached data and won't reflect focus changes.
-
-    Returns:
-        ApplicationControl or None.
-    """
-    from .controls import ApplicationControl
-    pid = GetForegroundWindowPID()
-    if pid:
-        return ApplicationControl(pid=pid)
-    return None
-
-
-def GetForegroundControl() -> Optional["WindowControl"]:
-    """Get the foreground window as a typed WindowControl, or None."""
-    from .controls import ApplicationControl
-    pid = GetForegroundWindowPID()
-    if pid:
-        app = ApplicationControl(pid=pid)
-        return app.FocusedWindow
-    return None
-
-
-def GetFocusedControl() -> Optional["Control"]:
-    """Get the currently focused UI element as a typed Control, or None."""
-    from .controls import ApplicationControl
-    pid = GetForegroundWindowPID()
-    if pid:
-        app = ApplicationControl(pid=pid)
-        return app.FocusedUIElement
-    return None
-
-
-def GetRunningApplicationByName(name: str) -> Optional["ApplicationControl"]:
-    """
-    Get a running application by its display name (case-insensitive exact match).
-
-    Args:
-        name: Application name (e.g., 'Dock', 'Safari', 'Google Chrome').
-
-    Returns:
-        ApplicationControl if found, None otherwise.
-    """
-    from .controls import ApplicationControl
-    name_lower = name.strip().lower()
-    for app in NSWorkspace.sharedWorkspace().runningApplications():
-        local_name = app.localizedName()
-        if local_name and str(local_name).lower() == name_lower:
-            return ApplicationControl(pid=app.processIdentifier())
-    return None
-
-
-def GetRunningApplicationByBundleId(bundle_id: str) -> Optional["ApplicationControl"]:
-    """
-    Get a running application by its bundle identifier (exact match).
-
-    Args:
-        bundle_id: CFBundleIdentifier (e.g., 'com.apple.dock', 'com.apple.Safari').
-
-    Returns:
-        ApplicationControl if found, None otherwise.
-    """
-    from .controls import ApplicationControl
-    for app in NSWorkspace.sharedWorkspace().runningApplications():
-        bid = app.bundleIdentifier()
-        if bid and str(bid) == bundle_id:
-            return ApplicationControl(pid=app.processIdentifier())
-    return None
-
-
-def HideOtherApplications() -> None:
-    """Hide all applications except the current one."""
-    NSWorkspace.sharedWorkspace().hideOtherApplications()
-
-
-def GetMenuBarOwningApplication() -> Optional[int]:
-    """
-    Get the PID of the application that currently owns the menu bar.
-
-    Returns:
-        PID of the menu bar owning application, or None.
-    """
-    try:
-        app = NSWorkspace.sharedWorkspace().menuBarOwningApplication()
-        if app:
-            return app.processIdentifier()
-    except Exception:
-        pass
-    return None
-
-
-def GetApplicationPathByName(name: str) -> Optional[str]:
-    """
-    Get the full filesystem path of an application by its name.
-
-    Args:
-        name: Application name (e.g., 'Safari', 'Google Chrome').
-
-    Returns:
-        Full path to the .app bundle, or None if not found.
-    """
-    workspace = NSWorkspace.sharedWorkspace()
-    path = workspace.fullPathForApplication_(name)
-    return str(path) if path else None
-
-
-def GetApplicationPathByBundleID(bundle_id: str) -> Optional[str]:
-    """
-    Get the full filesystem path of an application by its bundle identifier.
-
-    Args:
-        bundle_id: CFBundleIdentifier (e.g., 'com.apple.Safari').
-
-    Returns:
-        URL string to the .app bundle, or None if not found.
-    """
-    workspace = NSWorkspace.sharedWorkspace()
-    try:
-        url = workspace.URLForApplicationWithBundleIdentifier_(bundle_id)
-        return str(url) if url else None
-    except Exception:
-        return None
 
 
 def ActivateApplication(pid: int) -> bool:
@@ -1353,12 +1241,81 @@ def LaunchApplication(name: str) -> bool:
     return workspace.launchApplication_(name)
 
 
+def HideOtherApplications() -> None:
+    """
+    Hide all applications except the current one.
+    Equivalent to the Option+Cmd+H shortcut.
+    """
+    NSWorkspace.sharedWorkspace().hideOtherApplications()
+
+
+def GetMenuBarOwningApplication() -> Optional[int]:
+    """
+    Get the PID of the application that currently owns the menu bar.
+
+    Returns:
+        PID of the menu bar owning application, or None.
+    """
+    try:
+        app = NSWorkspace.sharedWorkspace().menuBarOwningApplication()
+        if app:
+            return app.processIdentifier()
+    except Exception:
+        pass
+    return None
+
+
+def GetApplicationPathByName(name: str) -> Optional[str]:
+    """
+    Get the full filesystem path of an application by its name.
+    Example: GetApplicationPathByName('Safari') -> '/Applications/Safari.app'
+
+    Args:
+        name: Application name (e.g., 'Safari', 'Google Chrome').
+
+    Returns:
+        Full path to the .app bundle, or None if not found.
+    """
+    workspace = NSWorkspace.sharedWorkspace()
+    path = workspace.fullPathForApplication_(name)
+    return str(path) if path else None
+
+
+def GetApplicationPathByBundleID(bundle_id: str) -> Optional[str]:
+    """
+    Get the full filesystem path of an application by its bundle identifier.
+    Example: GetApplicationPathByBundleID('com.apple.Safari') -> '/Applications/Safari.app'
+
+    Args:
+        bundle_id: CFBundleIdentifier (e.g., 'com.apple.Safari').
+
+    Returns:
+        URL string to the .app bundle, or None if not found.
+    """
+    workspace = NSWorkspace.sharedWorkspace()
+    try:
+        url = workspace.URLForApplicationWithBundleIdentifier_(bundle_id)
+        return str(url) if url else None
+    except Exception:
+        return None
+
+
 # =============================================================================
 # Workspace: File & URL Operations
 # =============================================================================
 
 def OpenFile(path: str, application: Optional[str] = None) -> bool:
-    """Open a file, optionally with a specific application."""
+    """
+    Open a file, optionally with a specific application.
+    If no application is specified, the default handler is used.
+
+    Args:
+        path: Full path to the file to open.
+        application: Optional application name (e.g., 'TextEdit').
+
+    Returns:
+        True if the file was opened successfully.
+    """
     workspace = NSWorkspace.sharedWorkspace()
     if application:
         return bool(workspace.openFile_withApplication_(path, application))
@@ -1366,7 +1323,16 @@ def OpenFile(path: str, application: Optional[str] = None) -> bool:
 
 
 def OpenURL(url_string: str) -> bool:
-    """Open a URL with the default handler application."""
+    """
+    Open a URL with the default handler application.
+    Works with http/https URLs, mailto: links, custom URL schemes, etc.
+
+    Args:
+        url_string: URL to open (e.g., 'https://apple.com', 'mailto:user@example.com').
+
+    Returns:
+        True if the URL was opened successfully.
+    """
     from Cocoa import NSURL
     workspace = NSWorkspace.sharedWorkspace()
     url = NSURL.URLWithString_(url_string)
@@ -1376,13 +1342,30 @@ def OpenURL(url_string: str) -> bool:
 
 
 def SelectFileInFinder(path: str) -> bool:
-    """Reveal and select a file in Finder."""
+    """
+    Reveal and select a file in Finder.
+    Equivalent to right-click -> 'Show in Finder'.
+
+    Args:
+        path: Full path to the file to reveal.
+
+    Returns:
+        True if the file was revealed successfully.
+    """
     workspace = NSWorkspace.sharedWorkspace()
     return bool(workspace.selectFile_inFileViewerRootedAtPath_(path, ''))
 
 
 def RecycleFiles(paths: Sequence[str]) -> bool:
-    """Move files to the Trash."""
+    """
+    Move files to the Trash.
+
+    Args:
+        paths: List of full file paths to trash.
+
+    Returns:
+        True if the operation was initiated (actual completion is async).
+    """
     from Cocoa import NSURL
     workspace = NSWorkspace.sharedWorkspace()
     urls = [NSURL.fileURLWithPath_(p) for p in paths]
@@ -1394,7 +1377,15 @@ def RecycleFiles(paths: Sequence[str]) -> bool:
 
 
 def DuplicateFiles(paths: Sequence[str]) -> bool:
-    """Duplicate files in Finder."""
+    """
+    Duplicate files in the Finder.
+
+    Args:
+        paths: List of full file paths to duplicate.
+
+    Returns:
+        True if the operation was initiated (actual completion is async).
+    """
     from Cocoa import NSURL
     workspace = NSWorkspace.sharedWorkspace()
     urls = [NSURL.fileURLWithPath_(p) for p in paths]
@@ -1406,7 +1397,15 @@ def DuplicateFiles(paths: Sequence[str]) -> bool:
 
 
 def IsFilePackage(path: str) -> bool:
-    """Check if a path points to a file package (e.g., .app bundle)."""
+    """
+    Check if a path points to a file package (e.g., .app bundle, .pages document).
+
+    Args:
+        path: Full path to check.
+
+    Returns:
+        True if the path is a file package.
+    """
     workspace = NSWorkspace.sharedWorkspace()
     return bool(workspace.isFilePackageAtPath_(path))
 
@@ -1416,7 +1415,15 @@ def IsFilePackage(path: str) -> bool:
 # =============================================================================
 
 def GetIconForFile(path: str) -> Optional[Any]:
-    """Get the NSImage icon for a file at the given path."""
+    """
+    Get the icon for a file at the given path.
+
+    Args:
+        path: Full path to the file.
+
+    Returns:
+        NSImage of the file's icon, or None on error.
+    """
     try:
         workspace = NSWorkspace.sharedWorkspace()
         return workspace.iconForFile_(path)
@@ -1425,7 +1432,16 @@ def GetIconForFile(path: str) -> Optional[Any]:
 
 
 def GetIconForFileType(file_type: str) -> Optional[Any]:
-    """Get the NSImage icon for a file type or UTI."""
+    """
+    Get the icon for a file type or UTI.
+
+    Args:
+        file_type: File extension (e.g., 'txt', 'pdf') or UTI
+                   (e.g., 'public.image', 'com.adobe.pdf').
+
+    Returns:
+        NSImage for the file type, or None on error.
+    """
     try:
         workspace = NSWorkspace.sharedWorkspace()
         return workspace.iconForFileType_(file_type)
@@ -1434,7 +1450,15 @@ def GetIconForFileType(file_type: str) -> Optional[Any]:
 
 
 def GetIconForFiles(paths: Sequence[str]) -> Optional[Any]:
-    """Get a composite NSImage icon representing multiple files."""
+    """
+    Get a composite icon representing multiple files.
+
+    Args:
+        paths: List of full file paths.
+
+    Returns:
+        NSImage composite icon, or None on error.
+    """
     try:
         workspace = NSWorkspace.sharedWorkspace()
         return workspace.iconForFiles_(paths)
@@ -1446,12 +1470,16 @@ def GetIconForFiles(paths: Sequence[str]) -> Optional[Any]:
 # Workspace: File Information
 # =============================================================================
 
-def GetFileInfo(path: str) -> Optional[dict]:
+def GetFileInfo(path: str) -> Optional[dict[str, Any]]:
     """
     Get information about a file (associated application and file type).
 
+    Args:
+        path: Full path to the file.
+
     Returns:
-        Dictionary with 'application' and 'type', or None on error.
+        Dictionary with 'application' (path to default app) and 'type' (file type string),
+        or None on error.
     """
     workspace = NSWorkspace.sharedWorkspace()
     try:
@@ -1469,7 +1497,16 @@ def GetFileInfo(path: str) -> Optional[dict]:
 
 
 def GetLocalizedDescriptionForType(uti: str) -> Optional[str]:
-    """Get a human-readable description for a Uniform Type Identifier (UTI)."""
+    """
+    Get a human-readable description for a Uniform Type Identifier (UTI).
+    Example: GetLocalizedDescriptionForType('public.jpeg') -> 'JPEG image'
+
+    Args:
+        uti: Uniform Type Identifier string.
+
+    Returns:
+        Localized description string, or None.
+    """
     try:
         workspace = NSWorkspace.sharedWorkspace()
         desc = workspace.localizedDescriptionForType_(uti)
@@ -1483,7 +1520,15 @@ def GetLocalizedDescriptionForType(uti: str) -> Optional[str]:
 # =============================================================================
 
 def GetDesktopImageURL(screen_index: int = 0) -> Optional[str]:
-    """Get the URL of the current desktop wallpaper image."""
+    """
+    Get the URL of the current desktop wallpaper image.
+
+    Args:
+        screen_index: Index of the screen (0 = main display).
+
+    Returns:
+        File URL string of the wallpaper, or None.
+    """
     from Cocoa import NSScreen
     workspace = NSWorkspace.sharedWorkspace()
     try:
@@ -1497,7 +1542,16 @@ def GetDesktopImageURL(screen_index: int = 0) -> Optional[str]:
 
 
 def SetDesktopImage(path: str, screen_index: int = 0) -> bool:
-    """Set the desktop wallpaper image."""
+    """
+    Set the desktop wallpaper image.
+
+    Args:
+        path: Full path to the image file.
+        screen_index: Index of the screen (0 = main display).
+
+    Returns:
+        True if the wallpaper was set successfully.
+    """
     from Cocoa import NSScreen, NSURL
     workspace = NSWorkspace.sharedWorkspace()
     try:
@@ -1520,6 +1574,17 @@ def SetDesktopImage(path: str, screen_index: int = 0) -> bool:
 def GetWorkspaceNotificationCenter() -> Any:
     """
     Get the NSWorkspace notification center for observing workspace events.
+
+    Use this to subscribe to events like:
+        - NSWorkspaceDidActivateApplicationNotification
+        - NSWorkspaceDidDeactivateApplicationNotification
+        - NSWorkspaceDidLaunchApplicationNotification
+        - NSWorkspaceDidTerminateApplicationNotification
+        - NSWorkspaceActiveSpaceDidChangeNotification
+        - NSWorkspaceDidWakeNotification
+        - NSWorkspaceWillSleepNotification
+        - NSWorkspaceDidMountNotification
+        - NSWorkspaceDidUnmountNotification
 
     Returns:
         NSNotificationCenter for the shared NSWorkspace.
@@ -1590,3 +1655,138 @@ def ExecuteCommand(command: str, mode: str = 'shell', timeout: int = 10) -> Tupl
         return (f"Command timed out after {timeout} seconds", -1)
     except Exception as e:
         return (str(e), -1)
+
+
+# =============================================================================
+# High-level Convenience Functions (Control-based)
+# =============================================================================
+
+def GetFrontmostApplication() -> Optional["ApplicationControl"]:
+    """
+    Get the frontmost application as an ApplicationControl.
+    Returns a fully-typed Control that supports .FocusedWindow, .Windows,
+    .Title, .FindFirst(), fluent chaining, etc.
+
+    Uses CGWindowListCopyWindowInfo (window server) instead of
+    NSWorkspace.frontmostApplication() because NSWorkspace relies on
+    AppKit notifications delivered via NSRunLoop. Without an active
+    event loop (e.g. Python scripts, notebooks), NSWorkspace returns
+    stale cached data and won't reflect focus changes.
+
+    Returns:
+        ApplicationControl or None.
+    """
+    from .controls import ApplicationControl
+    pid = GetForegroundWindowPID()
+    if pid:
+        return ApplicationControl(pid=pid)
+    return None
+
+
+def GetForegroundControl() -> Optional["WindowControl"]:
+    """
+    Get the foreground window as a typed Control (typically WindowControl).
+
+    Returns:
+        WindowControl or None.
+    """
+    from .controls import ApplicationControl
+    pid = GetForegroundWindowPID()
+    if pid:
+        app = ApplicationControl(pid=pid)
+        return app.FocusedWindow
+    return None
+
+
+def GetFocusedControl() -> Optional["Control"]:
+    """
+    Get the currently focused UI element as a typed Control.
+
+    Returns:
+        A typed Control subclass or None.
+    """
+    from .controls import ApplicationControl
+    pid = GetForegroundWindowPID()
+    if pid:
+        app = ApplicationControl(pid=pid)
+        return app.FocusedUIElement
+    return None
+
+
+def GetRunningApplications(
+    policy: Optional[str] = None,
+    status: Optional[str] = None,
+) -> list["ApplicationControl"]:
+    """
+    Get running applications as ApplicationControl objects with optional filtering.
+
+    String filters support combining multiple values with '+' for OR logic.
+
+    Args:
+        policy: Filter by activation policy.
+            'Regular'              — Normal apps (Dock + App Switcher).
+            'Accessory'            — Menu bar items, helpers (no Dock icon).
+            'Prohibited'           — Background agents/daemons.
+            'Regular+Accessory'    — Combine with '+' for OR matching.
+            None                   — Return all (default).
+        status: Filter by current status.
+            'Active'               — Frontmost app with visible windows.
+            'Visible'              — Has windows on screen, not frontmost.
+            'Hidden'               — Hidden via Cmd+H.
+            'Minimized'            — All windows minimized.
+            'Windowless'           — Running but no windows.
+            'Active+Visible'       — Combine with '+' for OR matching.
+            None                   — Return all (default).
+
+    Returns:
+        List of ApplicationControl matching the filters.
+    """
+    from .controls import ApplicationControl
+    raw_apps = NSWorkspace.sharedWorkspace().runningApplications()
+    apps = [ApplicationControl(pid=a.processIdentifier()) for a in raw_apps]
+
+    if policy is not None:
+        policies = {p.strip() for p in policy.split('+')}
+        apps = [a for a in apps if a.ActivationPolicy in policies]
+    if status is not None:
+        statuses = {s.strip() for s in status.split('+')}
+        apps = [a for a in apps if a.Status in statuses]
+
+    return apps
+
+
+def GetRunningApplicationByName(name: str) -> Optional["ApplicationControl"]:
+    """
+    Get a running application by its display name (case-insensitive exact match).
+
+    Args:
+        name: Application name (e.g., 'Dock', 'Safari', 'Google Chrome').
+
+    Returns:
+        ApplicationControl if found, None otherwise.
+    """
+    from .controls import ApplicationControl
+    name_lower = name.strip().lower()
+    for app in NSWorkspace.sharedWorkspace().runningApplications():
+        local_name = app.localizedName()
+        if local_name and str(local_name).lower() == name_lower:
+            return ApplicationControl(pid=app.processIdentifier())
+    return None
+
+
+def GetRunningApplicationByBundleId(bundle_id: str) -> Optional["ApplicationControl"]:
+    """
+    Get a running application by its bundle identifier (exact match).
+
+    Args:
+        bundle_id: CFBundleIdentifier (e.g., 'com.apple.dock', 'com.apple.Safari').
+
+    Returns:
+        ApplicationControl if found, None otherwise.
+    """
+    from .controls import ApplicationControl
+    for app in NSWorkspace.sharedWorkspace().runningApplications():
+        bid = app.bundleIdentifier()
+        if bid and str(bid) == bundle_id:
+            return ApplicationControl(pid=app.processIdentifier())
+    return None

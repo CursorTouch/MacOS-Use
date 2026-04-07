@@ -1,10 +1,9 @@
-from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_IDS, MAX_IMAGE_WIDTH, MAX_IMAGE_HEIGHT
+from macos_use.agent.desktop.config import BROWSER_BUNDLE_IDS, EXCLUDED_BUNDLE_IDS
 from macos_use.agent.desktop.views import DesktopState, Size, Window, Status
 from macos_use.agent.tree.views import BoundingBox, TreeElementNode
 from PIL import Image, ImageDraw, ImageFont, ImageGrab
 from typing import Literal, Optional, Tuple, Union
 from macos_use.agent.tree.service import Tree
-from contextlib import contextmanager
 import macos_use.ax as ax
 import requests
 import logging
@@ -15,84 +14,39 @@ import time
 
 logger = logging.getLogger(__name__)
 
-
 class Desktop:
-    def __init__(
-        self,
-        use_vision: bool = False,
-        use_annotation: bool = False,
-        use_accessibility: bool = True,
-    ):
-        if use_annotation and not use_vision:
-            use_vision = True
-        if use_annotation and not use_accessibility:
-            use_accessibility = True
-        self.use_vision = use_vision
-        self.use_annotation = use_annotation
-        self.use_accessibility = use_accessibility
+    def __init__(self):
         self.tree = Tree()
-        self.desktop_state: Optional[DesktopState] = None
-
-        # Cached system info
-        self._cached_macos_version: Optional[str] = None
-        self._cached_default_language: Optional[str] = None
+        self.desktop_state = None
 
     def get_screen_size(self) -> Size:
         """Return the virtual screen size (all displays combined) in logical points."""
         width, height = ax.GetScreenSize()
         return Size(width=width, height=height)
 
-    def get_macos_version(self) -> str:
-        if self._cached_macos_version is None:
-            self._cached_macos_version = ax.GetMacOSVersion()
-        return self._cached_macos_version
-
-    def get_default_language(self) -> str:
-        if self._cached_default_language is None:
-            self._cached_default_language = ax.GetDefaultLanguage()
-        return self._cached_default_language
-
-    def get_user_account_type(self) -> str:
-        return "Local Account"
-
-    def get_dpi_scaling(self) -> float:
-        return ax.GetDPIScale()
-
-    @contextmanager
-    def auto_minimize(self):
-        """Minimize the current foreground window and restore it after the block."""
-        app = ax.GetFrontmostApplication()
-        window = app.MainWindow if app else None
-        try:
-            if window:
-                window.Minimize()
-            yield
-        finally:
-            if window:
-                window.Unminimize()
-
-    def get_state(self) -> DesktopState:
-        windows = self.get_windows()
-        active_window = self.get_foreground_window()
-        tree_state = self.tree.get_state(active_window=active_window) if self.use_accessibility else None
-
-        if self.use_vision:
-            screen_size = self.get_screen_size()
-            scale_w = MAX_IMAGE_WIDTH / screen_size.width if screen_size.width > MAX_IMAGE_WIDTH else 1.0
-            scale_h = MAX_IMAGE_HEIGHT / screen_size.height if screen_size.height > MAX_IMAGE_HEIGHT else 1.0
-            scale = min(scale_w, scale_h)
-            nodes = tree_state.interactive_nodes if self.use_annotation and tree_state else []
-            screenshot = self.get_annotated_screenshot(nodes=nodes, scale=scale) if self.use_annotation and nodes else self.get_screenshot()
+    def get_state(
+        self,
+        use_vision: bool = False,
+        as_bytes: bool = False,
+        scale: float = 1.0,
+    ):
+        windows=self.get_windows()
+        active_window=self.get_foreground_window()
+        tree_state=self.tree.get_state(active_window=active_window)
+        if use_vision:
+            screenshot=self.get_annotated_screenshot(
+                nodes=tree_state.interactive_nodes,
+                as_bytes=as_bytes,
+                scale=scale,
+            )
         else:
-            screenshot = None
-
-        self.desktop_state = DesktopState(
+            screenshot=None
+        return DesktopState(
             active_window=active_window,
             windows=windows,
             screenshot=screenshot,
             tree_state=tree_state,
         )
-        return self.desktop_state
 
     def app(
         self,
@@ -239,16 +193,16 @@ class Desktop:
         time.sleep(duration)
 
     def get_foreground_window(self) -> Optional[Window]:
-        app = ax.GetFrontmostApplication()
+        app=ax.GetFrontmostApplication()
         if app is None:
             return None
-        window = app.MainWindow
+        window=app.MainWindow
         if window is None:
             return None
         is_browser = app.BundleIdentifier in BROWSER_BUNDLE_IDS
-        rect = window.BoundingRectangle
+        rect=window.BoundingRectangle
         if rect:
-            bounding_box = BoundingBox(
+            bounding_box=BoundingBox(
                 left=int(rect.left),
                 top=int(rect.top),
                 right=int(rect.right),
@@ -257,7 +211,7 @@ class Desktop:
                 height=int(rect.height),
             )
         else:
-            bounding_box = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
+            bounding_box=BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
         status_str = app.Status
         try:
             status = Status(status_str)
@@ -272,13 +226,15 @@ class Desktop:
             bundle_id=app.BundleIdentifier,
         )
 
-    def get_windows(self) -> list:
+    def get_windows(self) -> list[Window]:
         """
         Get list of user-facing application windows on the desktop.
+        Uses the ax module's ApplicationControl API for all data.
 
         Returns:
-            list of Window objects
+            windows — list of Window objects
         """
+        # Get all regular (Dock-visible) applications
         apps = ax.GetRunningApplications(policy='Regular')
 
         windows = []
@@ -291,12 +247,14 @@ class Desktop:
             pid = app.PID
             is_browser = bundle_id in BROWSER_BUNDLE_IDS
 
-            status_str = app.Status
+            # Map ApplicationControl.Status to our Status enum
+            status_str = app.Status  # 'Active', 'Fullscreen', 'Visible', etc.
             try:
                 status = Status(status_str)
             except ValueError:
                 status = Status.WINDOWLESS
 
+            # Get bounding box from the main window (if any)
             if status in (Status.HIDDEN, Status.MINIMIZED, Status.WINDOWLESS):
                 bbox = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
             else:
@@ -332,7 +290,15 @@ class Desktop:
         self,
         as_bytes: bool = False,
     ) -> Union[Image.Image, bytes, None]:
-        """Capture a screenshot of the screen using Pillow ImageGrab."""
+        """
+        Capture a screenshot of the screen using Pillow ImageGrab.
+
+        Args:
+            as_bytes: If True, return PNG bytes.
+
+        Returns:
+            PIL Image, PNG bytes, or None on failure.
+        """
         image = ImageGrab.grab(all_screens=True)
         if as_bytes:
             buf = io.BytesIO()
@@ -342,13 +308,20 @@ class Desktop:
 
     def get_annotated_screenshot(
         self,
-        nodes: list,
+        nodes: list[TreeElementNode],
         as_bytes: bool = False,
         scale: float = 1.0,
     ) -> Union[Image.Image, bytes, None]:
         """
         Take a screenshot and annotate it with numbered bounding boxes for each
-        interactive element.
+        interactive element. Captures the screenshot internally. Mirrors Windows-MCP.
+
+        Args:
+            nodes: List of TreeElementNode (interactive_nodes from tree state).
+            as_bytes: If True, return PNG bytes; otherwise return PIL Image.
+
+        Returns:
+            Annotated PIL Image, PNG bytes, or None on failure.
         """
         img = self.get_screenshot()
         if img is None:
@@ -362,6 +335,10 @@ class Desktop:
 
         draw = ImageDraw.Draw(padded)
 
+        # Per-display geometry for accurate logical→pixel coordinate mapping.
+        # ImageGrab stitches displays left-to-right in the combined image, each at
+        # its native pixel resolution, so we accumulate pixel_widths to find each
+        # display's pixel origin rather than using a single global scale factor.
         display_infos = ax.GetPerDisplayInfo()
         pixel_left_acc = 0
         for d in display_infos:
@@ -378,15 +355,17 @@ class Desktop:
                     return d
             return None
 
-        def _logical_to_pixel(lx: float, ly: float) -> tuple:
+        def _logical_to_pixel(lx: float, ly: float) -> tuple[int, int]:
             d = _find_display(lx, ly)
             if d:
                 px = d['pixel_left'] + int((lx - d['logical_left']) * d['scale'])
                 py = int((ly - d['logical_top']) * d['scale'])
                 return px, py
+            # Fallback: use average scale across all displays
             avg_scale = img.width / max(sum(d['logical_width'] for d in display_infos), 1)
             return int((lx - virtual_left) * avg_scale), int((ly - virtual_top) * avg_scale)
 
+        # Font sized to main display scale
         dpi_scale = display_infos[0]['scale'] if display_infos else ax.GetDPIScale()
         font_size = max(12, int(14 * dpi_scale))
         try:
@@ -397,7 +376,7 @@ class Desktop:
         except Exception:
             font = ImageFont.load_default()
 
-        seen_boxes: set = set()
+        seen_boxes: set[tuple[int, int, int, int]] = set()
 
         def draw_annotation(label: int, node: TreeElementNode) -> None:
             box = node.bounding_box
@@ -408,6 +387,7 @@ class Desktop:
                 return
             seen_boxes.add(box_key)
 
+            # Convert logical coordinates to pixel coordinates using per-display scale
             cx = (box.left + box.right) / 2
             cy = (box.top + box.bottom) / 2
             d = _find_display(cx, cy)
@@ -426,6 +406,7 @@ class Desktop:
                 x1 += padding; y1 += padding
                 x2 += padding; y2 += padding
 
+            # Deterministic color per label
             random.seed(label)
             color = (
                 random.randint(50, 255),
@@ -442,6 +423,7 @@ class Desktop:
             except Exception:
                 text_w, text_h = len(label_text) * 8, font_size
 
+            # Label above box, or below if no room
             tag_x1 = x2 - text_w - 4
             tag_y1 = y1 - text_h - 4
             if tag_y1 < padding:
@@ -455,7 +437,7 @@ class Desktop:
         for i, node in enumerate(nodes):
             draw_annotation(i, node)
 
-        if 0 < scale < 1.0:
+        if scale < 1.0 and scale > 0:
             new_w = max(1, int(padded.width * scale))
             new_h = max(1, int(padded.height * scale))
             padded = padded.resize((new_w, new_h), Image.Resampling.BILINEAR)

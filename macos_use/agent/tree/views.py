@@ -1,22 +1,21 @@
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, Any
+from dataclasses import dataclass,field
+from typing import TYPE_CHECKING, Optional,Any
 import json
 
-WARNING_MESSAGE = "The desktop UI services are temporarily unavailable. Please wait a few seconds and continue."
-EMPTY_MESSAGE = "No elements found"
+WARNING_MESSAGE="The desktop UI services are temporarily unavailable. Please wait a few seconds and continue."
+EMPTY_MESSAGE="No elements found"
 
 if TYPE_CHECKING:
     from macos_use.ax.core import Rect
 
-
 @dataclass
 class TreeState:
-    status: bool = True
-    root_node: Optional['TreeElementNode'] = None
-    dom_node: Optional['ScrollElementNode'] = None
-    interactive_nodes: list = field(default_factory=list)
-    scrollable_nodes: list = field(default_factory=list)
-    dom_informative_nodes: list = field(default_factory=list)
+    status:bool=True
+    root_node:Optional['TreeElementNode']=None
+    dom_node:Optional['ScrollElementNode']=None
+    interactive_nodes:list['TreeElementNode']|None=field(default_factory=list)
+    scrollable_nodes:list['ScrollElementNode']|None=field(default_factory=list)
+    dom_informative_nodes:list['TextElementNode']|None=field(default_factory=list)
 
     def interactive_elements_to_string(self) -> str:
         parts = []
@@ -26,6 +25,8 @@ class TreeState:
         if not self.interactive_nodes and self.status:
             parts.append(EMPTY_MESSAGE)
             return "\n".join(parts)
+        # TOON-like format: Pipe-separated values with clear header
+        # Using abbreviations in header to save tokens
         header = "# id|window|control_type|name|coords|metadata"
         rows = [header]
         for idx, node in enumerate(self.interactive_nodes):
@@ -42,6 +43,7 @@ class TreeState:
         if not self.scrollable_nodes and self.status:
             parts.append(EMPTY_MESSAGE)
             return "\n".join(parts)
+        # TOON-like format
         header = "# id|window|control_type|name|coords|metadata"
         rows = [header]
         base_index = len(self.interactive_nodes)
@@ -51,41 +53,42 @@ class TreeState:
             rows.append(row)
         parts.append("\n".join(rows))
         return "\n".join(parts)
-
-
+    
 @dataclass
 class BoundingBox:
-    left: int
-    top: int
-    right: int
-    bottom: int
-    width: int
-    height: int
+    left:int
+    top:int
+    right:int
+    bottom:int
+    width:int
+    height:int
 
     @classmethod
-    def from_bounding_rectangle(cls, bounding_rectangle: 'Rect') -> 'BoundingBox':
+    def from_bounding_rectangle(cls,bounding_rectangle:'Rect')->'BoundingBox':
         return cls(
             left=int(bounding_rectangle.left),
             top=int(bounding_rectangle.top),
             right=int(bounding_rectangle.right),
             bottom=int(bounding_rectangle.bottom),
             width=int(bounding_rectangle.width),
-            height=int(bounding_rectangle.height),
+            height=int(bounding_rectangle.height)
         )
 
-    def get_center(self) -> 'Center':
-        return Center(x=self.left + self.width // 2, y=self.top + self.height // 2)
+    def get_center(self)->'Center':
+        return Center(x=self.left+self.width//2,y=self.top+self.height//2)
 
     def xywh_to_string(self):
         return f'({self.left},{self.top},{self.width},{self.height})'
-
+    
     def xyxy_to_string(self):
-        x1, y1, x2, y2 = self.convert_xywh_to_xyxy()
+        x1,y1,x2,y2=self.convert_xywh_to_xyxy()
         return f'({x1},{y1},{x2},{y2})'
-
-    def convert_xywh_to_xyxy(self) -> tuple:
-        return self.left, self.top, self.left + self.width, self.top + self.height
-
+    
+    def convert_xywh_to_xyxy(self)->tuple[int,int,int,int]:
+        x1,y1=self.left,self.top
+        x2,y2=self.left+self.width,self.top+self.height
+        return x1,y1,x2,y2
+    
     def contains(self, other: 'BoundingBox') -> bool:
         return (
             self.left <= other.left and
@@ -94,25 +97,36 @@ class BoundingBox:
             self.bottom >= other.bottom
         )
 
-
 @dataclass
 class Center:
-    x: int
-    y: int
+    x:int
+    y:int
 
-    def to_string(self) -> str:
+    def to_string(self)->str:
         return f'({self.x},{self.y})'
-
 
 @dataclass
 class TreeElementNode:
     bounding_box: BoundingBox
     center: Center
-    name: str = ''
-    control_type: str = ''
-    window_name: str = ''
-    metadata: dict = field(default_factory=dict)
+    name: str=''
+    control_type: str=''
+    window_name: str=''
+    metadata:dict[str,Any]=field(default_factory=dict)
 
+    def update_from_node(self,node:'TreeElementNode'):
+        self.name=node.name
+        self.control_type=node.control_type
+        self.window_name=node.window_name
+        self.value=node.value
+        self.shortcut=node.shortcut
+        self.bounding_box=node.bounding_box
+        self.center=node.center
+        self.metadata=node.metadata
+
+    # Legacy method kept for compatibility if needed, but not used in new format
+    def to_row(self, index: int):
+        return [index, self.window_name, self.control_type, self.name, self.value, self.shortcut, self.center.to_string(),self.is_focused]
 
 @dataclass
 class ScrollElementNode:
@@ -121,12 +135,21 @@ class ScrollElementNode:
     window_name: str
     bounding_box: BoundingBox
     center: Center
-    metadata: dict = field(default_factory=dict)
+    metadata:dict[str,Any]=field(default_factory=dict)
 
+    # Legacy method kept for compatibility
+    def to_row(self, index: int, base_index: int):
+        return [
+            base_index + index,
+            self.window_name,
+            self.control_type,
+            self.name,
+            self.center.to_string(),
+            json.dumps(self.metadata)
+        ]
 
 @dataclass
 class TextElementNode:
-    text: str
+    text:str
 
-
-ElementNode = TreeElementNode | ScrollElementNode | TextElementNode
+ElementNode=TreeElementNode|ScrollElementNode|TextElementNode

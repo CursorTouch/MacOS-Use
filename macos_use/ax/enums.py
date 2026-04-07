@@ -137,79 +137,6 @@ class Role:
     Switch = 'AXSwitch'
 
 
-# Interactive roles - elements that users can interact with
-INTERACTIVE_ROLES = {
-    Role.Button,
-    Role.CheckBox,
-    Role.RadioButton,
-    Role.TextField,
-    Role.TextArea,
-    Role.ComboBox,
-    Role.PopUpButton,
-    Role.Slider,
-    Role.Incrementor,
-    Role.Link,
-    Role.MenuItem,
-    Role.MenuBarItem,
-    Role.Tab,
-    Role.DockItem,
-    Role.Cell,
-    Role.Row,
-    Role.Toggle,
-    Role.Switch,
-    Role.DisclosureTriangle,
-    Role.ColorWell,
-    Role.LevelIndicator,
-    Role.ValueIndicator,
-}
-
-
-# Container roles - elements that hold other elements
-CONTAINER_ROLES = {
-    Role.Window,
-    Role.Toolbar,
-    Role.Group,
-    Role.ScrollArea,
-    Role.SplitGroup,
-    Role.List,
-    Role.TabGroup,
-    Role.WebArea,
-    Role.Popover,
-    Role.Sheet,
-    Role.LayoutArea,
-    Role.LayoutItem,
-}
-
-# Non-interactive roles - informational elements
-NON_INTERACTIVE_ROLES = {
-    Role.List,
-    Role.MenuBar,
-    Role.Menu,
-    Role.Group,
-    Role.ScrollArea,
-    Role.StaticText,
-    Role.RadioGroup,
-    Role.Grid,
-    Role.Application,
-    Role.Window,
-    Role.Toolbar,
-    Role.SplitGroup,
-    Role.TabGroup,
-    Role.WebArea,
-}
-
-# Scrollable roles - elements that can be scrolled
-SCROLLABLE_ROLES = {
-    Role.ScrollArea,
-    Role.ScrollView,
-    Role.Table,
-    Role.List,
-    Role.Outline,
-    Role.Browser,
-    Role.TextArea,
-}
-
-
 RoleNames = {v: k for k, v in vars(Role).items() if not k.startswith('_') and isinstance(v, str)}
 
 
@@ -270,15 +197,6 @@ class Subrole:
     Toggle = 'AXToggle'
     Switch = 'AXSwitch'
     DescriptionList = 'AXDescriptionList'
-
-
-# Window control subroles with friendly names
-WINDOW_CONTROL_SUBROLES = {
-    Subrole.CloseButton: 'Close Button',
-    Subrole.MinimizeButton: 'Minimize Button',
-    Subrole.ZoomButton: 'Zoom Button',
-    Subrole.FullScreenButton: 'Full Screen Button',
-}
 
 
 SubroleNames = {v: k for k, v in vars(Subrole).items() if not k.startswith('_') and isinstance(v, str)}
@@ -457,19 +375,6 @@ class Action:
     ScrollDownByPage = 'AXScrollDownByPage'
 
 
-# Actions that indicate an element is interactive
-INTERACTIVE_ACTIONS = {
-    Action.Press,
-    Action.Confirm,
-    Action.Cancel,
-    Action.Increment,
-    Action.Decrement,
-    Action.ShowMenu,
-    Action.Pick,
-    Action.Raise,
-}
-
-
 ActionNames = {v: k for k, v in vars(Action).items() if not k.startswith('_') and isinstance(v, str)}
 
 
@@ -574,6 +479,21 @@ ALL_NOTIFICATIONS = list(
 
 
 NotificationNames = {v: k for k, v in vars(Notification).items() if not k.startswith('_') and isinstance(v, str)}
+
+
+# =============================================================================
+# Notification Info Keys
+# =============================================================================
+
+class NotificationKey:
+    """
+    Keys used in notification info dictionaries.
+    Passed to AXObserverCallbackWithInfo callbacks.
+    Refer: HIServices/AXNotificationConstants.h
+    """
+    Announcement = 'AXAnnouncementKey'
+    Priority = 'AXPriorityKey'
+    UIElements = 'AXUIElementsKey'
 
 
 # =============================================================================
@@ -867,21 +787,6 @@ class Units:
     Paragraphs = 'AXParagraphsUnit'
     Pages = 'AXPagesUnit'
     Document = 'AXDocumentUnit'
-
-
-# =============================================================================
-# Notification Info Keys
-# =============================================================================
-
-class NotificationKey:
-    """
-    Keys used in notification info dictionaries.
-    Passed to AXObserverCallbackWithInfo callbacks.
-    Refer: HIServices/AXNotificationConstants.h
-    """
-    Announcement = 'AXAnnouncementKey'
-    Priority = 'AXPriorityKey'
-    UIElements = 'AXUIElementsKey'
 
 
 # =============================================================================

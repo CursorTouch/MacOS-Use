@@ -1,11 +1,8 @@
 """
 WatchDog Service for monitoring macOS Accessibility events.
-Now uses the centralized ax module's EventObserver for all event observation.
-
-The WatchDog is a thin wrapper around ax.EventObserver that provides the same
-interface as before but delegates all AXObserver management to the ax module.
+Delegates to the ax module's EventObserver for the underlying AXObserver management.
 """
-import macos_use.ax as ax
+from macos_use.ax import EventObserver
 from typing import Callable, Optional
 import logging
 
@@ -16,12 +13,15 @@ logger.setLevel(logging.INFO)
 class WatchDog:
     """
     Unified WatchDog Service for monitoring macOS Accessibility events.
-    Uses the centralized ax.EventObserver for all observation.
+    Wraps the ax module's EventObserver to track changes across applications.
     
     The WatchDog helps overcome laziness in the accessibility tree by:
     1. Monitoring focus changes when users interact with UI
     2. Detecting structure changes when UI elements are added/removed
     3. Tracking property changes like value updates
+    
+    This allows the tree traversal to be more complete as notifications
+    trigger callbacks that can force fresh tree reads.
     
     Usage:
         watchdog = WatchDog()
@@ -34,8 +34,12 @@ class WatchDog:
         watchdog.stop()
     """
     
-    def __init__(self):
-        self._observer = ax.EventObserver()
+    def __init__(self, debounce_interval: float = 0.05):
+        """
+        Args:
+            debounce_interval: Minimum time between events in seconds (default 50ms).
+        """
+        self._observer = EventObserver(debounce_interval=debounce_interval)
     
     def __enter__(self):
         self.start()
@@ -46,18 +50,18 @@ class WatchDog:
     
     @property
     def is_running(self) -> bool:
-        """Check if the watchdog is running."""
+        """Check if the watchdog is currently running."""
         return self._observer.is_running
     
     def start(self):
         """Start the watchdog service."""
         self._observer.start()
-        logger.debug("WatchDog service started")
+        logger.info("WatchDog service started")
     
     def stop(self):
         """Stop the watchdog service."""
         self._observer.stop()
-        logger.debug("WatchDog service stopped")
+        logger.info("WatchDog service stopped")
     
     def set_focus_callback(self, callback: Optional[Callable]):
         """

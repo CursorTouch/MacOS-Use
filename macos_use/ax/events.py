@@ -8,7 +8,7 @@ Equivalent to the Windows UIA events.py module, adapted for macOS.
 
 import logging
 import time
-from typing import Optional, Callable, Set
+from typing import Any, Callable, Optional, Sequence, Set
 from threading import Thread, Event, Lock
 
 import objc
@@ -82,7 +82,7 @@ class AppObserver:
         self.run_loop_source = None
         self.registered_notifications: Set[str] = set()
 
-    def start(self, notifications: list) -> bool:
+    def start(self, notifications: Sequence[str]) -> bool:
         """
         Create the observer and register for notifications.
 
@@ -163,7 +163,7 @@ class AppObserver:
         except Exception as e:
             logger.debug(f"Error stopping observer for PID {self.pid}: {e}")
 
-    def matches_observer(self, observer) -> bool:
+    def matches_observer(self, observer: Any) -> bool:
         """Check if this AppObserver owns the given AXObserver."""
         return self.observer is observer
 
@@ -260,7 +260,7 @@ class EventObserver:
         _observer_registry.pop(self._instance_id, None)
         logger.debug(f"EventObserver stopped (instance {self._instance_id})")
 
-    def _has_observer(self, observer) -> bool:
+    def _has_observer(self, observer: Any) -> bool:
         """Check if this EventObserver owns the given AXObserver."""
         with self._lock:
             for app_observer in self._app_observers.values():
@@ -268,7 +268,7 @@ class EventObserver:
                     return True
         return False
 
-    def _dispatch(self, element, notification: str, pid: int) -> None:
+    def _dispatch(self, element: Any, notification: str, pid: int) -> None:
         """Dispatch a notification to the appropriate callback."""
         current_time = time.time()
         if current_time - self._last_event_time < self._debounce_interval:
@@ -297,7 +297,7 @@ class EventObserver:
             pass
         return pids
 
-    def _get_notifications_to_register(self) -> list:
+    def _get_notifications_to_register(self) -> list[str]:
         """Determine which notifications to register based on set callbacks."""
         notifications = []
 
@@ -305,6 +305,7 @@ class EventObserver:
             notifications.extend([
                 Notification.FocusedUIElementChanged,
                 Notification.FocusedWindowChanged,
+                Notification.MainWindowChanged,
             ])
 
         if self.on_structure_changed:
@@ -323,7 +324,11 @@ class EventObserver:
                 Notification.TitleChanged,
                 Notification.SelectedTextChanged,
                 Notification.SelectedChildrenChanged,
+                Notification.SelectedChildrenMoved,
                 Notification.SelectedRowsChanged,
+                Notification.SelectedColumnsChanged,
+                Notification.SelectedCellsChanged,
+                Notification.UnitsChanged,
                 Notification.Moved,
                 Notification.Resized,
             ])

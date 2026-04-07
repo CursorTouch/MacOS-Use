@@ -1,6 +1,3 @@
-"""
-Configuration constants for macOS desktop module.
-"""
 
 # Bundle IDs for known browser applications
 BROWSER_BUNDLE_IDS = {
@@ -20,13 +17,12 @@ EXCLUDED_BUNDLE_IDS = {
 }
 
 # System UI apps to include in accessibility tree (whitelist).
+# Use explicit bundle IDs instead of policy='Accessory' to avoid traversing
+# helpers (Chrome Helper, Cursor Helper), agents (WallpaperAgent, talagent),
+# and other accessory processes that add noise.
 SYSTEM_UI_BUNDLE_IDS = {
-    'com.apple.dock',
-    'com.apple.controlcenter',
-    'com.apple.systemuiserver',
-    'com.apple.Spotlight',
+    'com.apple.dock',           # Dock icons
+    'com.apple.controlcenter',  # Control Centre panel
+    'com.apple.systemuiserver', # Menu bar extras (WiFi, battery, clock, etc.)
+    'com.apple.Spotlight'
 }
-
-# Max image dimensions for screenshots
-MAX_IMAGE_WIDTH = 1920
-MAX_IMAGE_HEIGHT = 1080

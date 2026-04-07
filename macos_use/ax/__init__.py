@@ -17,22 +17,30 @@ Structure:
 Usage:
     import macos_use.ax as ax
 
-    # Get screen size
-    width, height = ax.GetScreenSize()
+    # High-level entry -- returns ApplicationControl
+    app = ax.GetFrontmostApplication()
+    print(app.Title)
 
-    # Click at coordinates
-    ax.Click(100, 200)
-
-    # Create a Control from PID
-    app = ax.Control(pid=12345)
+    # Fluent chaining for child discovery
     window = app.FocusedWindow
-    buttons = window.FindAll(role=ax.Role.Button)
+    window.TextFieldControl(title="Search").SendKeys("hello")
+    window.ButtonControl(title="Submit").Click()
 
-    # Use patterns
-    for btn in buttons:
-        if ax.InvokePattern.IsSupported(btn.Element):
-            pattern = ax.InvokePattern(btn.Element)
-            pattern.Invoke()
+    # Window management
+    window.SetActive()
+    window.MoveToCenter()
+    window.Maximize()
+
+    # Direct interactions on any control
+    btn = window.FindFirst(role=ax.Role.Button, title="OK")
+    btn.Click()
+    btn.DoubleClick()
+    btn.RightClick()
+
+    # Low-level operations still available
+    width, height = ax.GetScreenSize()
+    ax.Click(100, 200)
+    ax.TypeText("hello world")
 """
 
 # Enums - Constants
@@ -42,17 +50,11 @@ from .enums import (
     AXValueType,
     Role,
     RoleNames,
-    INTERACTIVE_ROLES,
-    CONTAINER_ROLES,
-    NON_INTERACTIVE_ROLES,
-    SCROLLABLE_ROLES,
     Subrole,
     SubroleNames,
-    WINDOW_CONTROL_SUBROLES,
     Attribute,
     Action,
     ActionNames,
-    INTERACTIVE_ACTIONS,
     Notification,
     NotificationNames,
     NotificationKey,
@@ -74,16 +76,19 @@ from .enums import (
     ActivationPolicyNames,
 )
 
-# Core - Low-level functions
+# Core - Functions
 from .core import (
+    # Data types
     Rect,
     Point,
     Size,
+    # AX client
     _AXClient,
     GetRootControl,
     ControlFromPID,
     IsAccessibilityEnabled,
     IsAccessibilityEnabledWithPrompt,
+    # Attribute access
     GetAttribute,
     SetAttribute,
     IsAttributeSettable,
@@ -92,6 +97,7 @@ from .core import (
     PerformAction,
     GetChildCount,
     GetChildren,
+    # Geometry
     GetPosition,
     GetSize,
     GetRect,
@@ -103,6 +109,7 @@ from .core import (
     GetActionDescription,
     SetMessagingTimeout,
     GetMessagingTimeout,
+    # Screen
     GetScreenSize,
     GetMainDisplaySize,
     GetDisplayCount,
@@ -111,6 +118,7 @@ from .core import (
     GetPerDisplayInfo,
     CaptureScreen,
     CGImageToPIL,
+    # Mouse
     GetCursorPos,
     SetCursorPos,
     MoveTo,
@@ -123,12 +131,13 @@ from .core import (
     WheelUp,
     WheelLeft,
     WheelRight,
+    # Keyboard
     KeyDown,
     KeyUp,
     KeyPress,
     HotKey,
     TypeText,
-    GetWindowList,
+    # Application & Window (high-level, returns Control objects)
     GetForegroundWindowPID,
     GetFrontmostApplication,
     GetForegroundControl,
@@ -142,20 +151,26 @@ from .core import (
     GetMenuBarOwningApplication,
     GetApplicationPathByName,
     GetApplicationPathByBundleID,
+    # Workspace: File & URL Operations
     OpenFile,
     OpenURL,
     SelectFileInFinder,
     RecycleFiles,
     DuplicateFiles,
     IsFilePackage,
+    # Workspace: Icons
     GetIconForFile,
     GetIconForFileType,
     GetIconForFiles,
+    # Workspace: File Information
     GetFileInfo,
     GetLocalizedDescriptionForType,
+    # Workspace: Desktop Wallpaper
     GetDesktopImageURL,
     SetDesktopImage,
+    # Workspace: Notification Center
     GetWorkspaceNotificationCenter,
+    # System
     GetMacOSVersion,
     GetDefaultLanguage,
     ExecuteCommand,

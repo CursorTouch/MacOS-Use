@@ -9,7 +9,7 @@ that provide a consistent interaction API.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from .core import (
     GetAttribute,
@@ -22,6 +22,9 @@ from .enums import (
     Attribute,
 )
 
+if TYPE_CHECKING:
+    from .controls import Control
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +36,7 @@ class InvokePattern:
     Applies to: Buttons, links, menu items, and other clickable elements.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     def Invoke(self) -> bool:
@@ -44,7 +47,7 @@ class InvokePattern:
         return PerformAction(self._element, Action.Press)
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Invoke pattern."""
         from .core import GetActionNames
         actions = GetActionNames(element)
@@ -59,7 +62,7 @@ class ValuePattern:
     Applies to: Text fields, text areas, sliders, combo boxes.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -82,7 +85,7 @@ class ValuePattern:
         return SetAttribute(self._element, Attribute.Value, value)
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Value pattern."""
         from .core import GetAttributeNames
         return Attribute.Value in GetAttributeNames(element)
@@ -96,7 +99,7 @@ class RangeValuePattern:
     Applies to: Sliders, progress indicators, level indicators.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -140,7 +143,7 @@ class RangeValuePattern:
         return PerformAction(self._element, Action.Decrement)
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the RangeValue pattern."""
         from .core import GetActionNames
         actions = GetActionNames(element)
@@ -183,7 +186,7 @@ class TogglePattern:
         return PerformAction(self._element, Action.Press)
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Toggle pattern."""
         from .core import GetAttribute as _GetAttr
         role = _GetAttr(element, Attribute.Role)
@@ -198,7 +201,7 @@ class ExpandCollapsePattern:
     Applies to: Disclosure triangles, outline rows, combo boxes.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -224,7 +227,7 @@ class ExpandCollapsePattern:
         return True
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the ExpandCollapse pattern."""
         from .core import GetAttributeNames
         attrs = GetAttributeNames(element)
@@ -239,7 +242,7 @@ class ScrollPattern:
     Applies to: Scroll areas, lists, tables.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -297,7 +300,7 @@ class ScrollPattern:
         return False
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Scroll pattern."""
         h_bar = GetAttribute(element, Attribute.HorizontalScrollBar)
         v_bar = GetAttribute(element, Attribute.VerticalScrollBar)
@@ -312,17 +315,17 @@ class SelectionPattern:
     Applies to: Lists, tables, tab groups.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
-    def SelectedChildren(self) -> list:
+    def SelectedChildren(self) -> list[Any]:
         """Get the currently selected children as raw elements."""
         children = GetAttribute(self._element, Attribute.SelectedChildren)
         return list(children) if children else []
 
     @property
-    def SelectedChildControls(self) -> list:
+    def SelectedChildControls(self) -> list["Control"]:
         """Get the currently selected children as Control objects."""
         from .controls import Control
         children = GetAttribute(self._element, Attribute.SelectedChildren)
@@ -331,7 +334,7 @@ class SelectionPattern:
         return []
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Selection pattern."""
         from .core import GetAttributeNames
         return Attribute.SelectedChildren in GetAttributeNames(element)
@@ -345,7 +348,7 @@ class WindowPattern:
     Applies to: Windows.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -386,7 +389,7 @@ class WindowPattern:
         return PerformAction(self._element, Action.Raise)
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Window pattern."""
         from .core import GetAttribute as _GetAttr
         role = _GetAttr(element, Attribute.Role)
@@ -401,7 +404,7 @@ class TextPattern:
     Applies to: Text fields, text areas, static text.
     """
 
-    def __init__(self, element):
+    def __init__(self, element: Any) -> None:
         self._element = element
 
     @property
@@ -438,7 +441,7 @@ class TextPattern:
         return val if val is not None else 0
 
     @staticmethod
-    def IsSupported(element) -> bool:
+    def IsSupported(element: Any) -> bool:
         """Check if the element supports the Text pattern."""
         from .core import GetAttributeNames
         attrs = GetAttributeNames(element)
