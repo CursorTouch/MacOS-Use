@@ -278,8 +278,15 @@ class Agent(BaseAgent):
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
                 self.watchdog.set_focus_callback(self.desktop.tree.on_focus_changed)
-                with self.watchdog:
+                try:
+                    self.watchdog.start()
+                except Exception as e:
+                    logger.warning(f"Watchdog failed to start (non-fatal): {e}. Continuing without event monitoring.")
+                try:
                     result = self.loop()
+                finally:
+                    if self.watchdog.is_running:
+                        self.watchdog.stop()
             self.telemetry.capture(AgentTelemetryEvent(
                 query=task,
                 steps=self.state.step,
@@ -465,8 +472,15 @@ class Agent(BaseAgent):
         try:
             with self.desktop.auto_minimize() if self.auto_minimize else nullcontext():
                 self.watchdog.set_focus_callback(self.desktop.tree.on_focus_changed)
-                with self.watchdog:
+                try:
+                    self.watchdog.start()
+                except Exception as e:
+                    logger.warning(f"Watchdog failed to start (non-fatal): {e}. Continuing without event monitoring.")
+                try:
                     result = await self.aloop()
+                finally:
+                    if self.watchdog.is_running:
+                        self.watchdog.stop()
             self.telemetry.capture(AgentTelemetryEvent(
                 query=task,
                 steps=self.state.step,
