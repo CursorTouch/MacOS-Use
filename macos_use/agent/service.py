@@ -144,6 +144,14 @@ class Agent(BaseAgent):
                 desktop=self.desktop,
                 nudge=nudge or "",
             )
+            active_app = (
+                self.desktop.desktop_state.active_window.name
+                if self.desktop.desktop_state and self.desktop.desktop_state.active_window
+                else "Unknown"
+            )
+            # self.event.emit(
+            #     AgentEvent(type=EventType.STATE, data={"step": step, "max_steps": self.state.max_steps, "active_app": active_app})
+            # )
             if nudge:
                 self.event.emit(
                     AgentEvent(type=EventType.ERROR, data={"step": step, "error": f"Loop detected: {nudge}"})
@@ -333,6 +341,14 @@ class Agent(BaseAgent):
                 desktop=self.desktop,
                 nudge=nudge or "",
             )
+            active_app = (
+                self.desktop.desktop_state.active_window.name
+                if self.desktop.desktop_state and self.desktop.desktop_state.active_window
+                else "Unknown"
+            )
+            # self.event.emit(
+            #     AgentEvent(type=EventType.STATE, data={"step": step, "max_steps": self.state.max_steps, "active_app": active_app})
+            # )
             if nudge:
                 self.event.emit(
                     AgentEvent(type=EventType.ERROR, data={"step": step, "error": f"Loop detected: {nudge}"})

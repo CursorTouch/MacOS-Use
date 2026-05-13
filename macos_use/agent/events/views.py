@@ -9,6 +9,7 @@ class EventType(str, Enum):
     THOUGHT = "thought"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
+    STATE = "state"
     DONE = "done"
     ERROR = "error"
 

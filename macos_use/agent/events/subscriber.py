@@ -40,6 +40,11 @@ class ConsoleEventSubscriber(BaseEventSubscriber):
 
     def invoke(self, event: AgentEvent) -> None:
         match event.type:
+            case EventType.STATE:
+                step = event.data.get("step", 0)
+                max_steps = event.data.get("max_steps", "?")
+                app = event.data.get("active_app", "Unknown")
+                logger.info(f"[Step {step + 1}/{max_steps}] 🖥️  Active App: {app}")
             case EventType.THOUGHT:
                 t = event.data.get("thought", "")
                 logger.info(f"[Agent] 🧠 Thinking: {t}")

@@ -8,6 +8,8 @@ from time import sleep
 memory_path=Path.cwd()/'.memories'
 memory_path.mkdir(parents=True, exist_ok=True)
 
+_SCRAPE_MAX_CHARS = 20_000
+
 def _resolve_memory_path(path: str) -> Path:
     """Resolve a memory file path, always sandboxed within .memories directory."""
     file_path = (memory_path / path).resolve()
@@ -297,6 +299,11 @@ def desktop_tool(action: Literal['create', 'remove', 'rename', 'switch'], deskto
     except Exception as e:
         return f"Error executing desktop action '{action}': {str(e)}"
 
+def _truncate_scrape(content: str) -> str:
+    if len(content) > _SCRAPE_MAX_CHARS:
+        return content[:_SCRAPE_MAX_CHARS] + f"\n\n...[truncated — {len(content) - _SCRAPE_MAX_CHARS} chars omitted. Scroll the page and scrape again to read more.]"
+    return content
+
 @Tool('scrape_tool',model=Scrape)
 def scrape_tool(url:str,**kwargs)->str:
     '''
@@ -310,11 +317,11 @@ def scrape_tool(url:str,**kwargs)->str:
     desktop_state=desktop.desktop_state
     tree_state=desktop_state.tree_state
     if not tree_state.dom_node:
-        content=desktop.scrape(url)
+        content=_truncate_scrape(desktop.scrape(url))
         return f'URL:{url}\nContent:\n{content}'
     dom_node=tree_state.dom_node
     vertical_scroll_percent=dom_node.vertical_scroll_percent
-    content='\n'.join([node.text for node in tree_state.dom_informative_nodes])
+    content=_truncate_scrape('\n'.join([node.text for node in tree_state.dom_informative_nodes]))
     header_status = "Reached top" if vertical_scroll_percent <= 0 else "Scroll up to see more"
     footer_status = "Reached bottom" if vertical_scroll_percent >= 100 else "Scroll down to see more"
     return f'URL:{url}\nContent:\n{header_status}\n{content}\n{footer_status}'
