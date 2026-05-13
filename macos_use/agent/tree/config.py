@@ -65,11 +65,12 @@ NON_INTERACTIVE_ROLES = {
 SCROLLABLE_ROLES = {
     'AXScrollArea',
     'AXScrollView',
-    'AXTable',
-    'AXList',
-    'AXOutline',
+    'AXWebArea',
+    # 'AXTable',
+    # 'AXList',
+    # 'AXOutline',
     'AXBrowser',
-    'AXTextArea',
+    # 'AXTextArea',
 }
 
 # Actions that indicate an element is interactive
@@ -90,4 +91,25 @@ WINDOW_CONTROL_SUBROLES = {
     'AXMinimizeButton': 'Minimize Button',
     'AXZoomButton': 'Zoom Button',
     'AXFullScreenButton': 'Full Screen Button',
+}
+
+# Roles that should be skipped during tree traversal to improve performance.
+# These are either decorative/structural elements with no interactive children
+# or elements whose subtrees never yield actionable nodes.
+PRUNABLE_ROLES = {
+    'AXScrollBar',
+    'AXGrowArea',
+    'AXUnknown',
+    'AXValueIndicator',
+    'AXLevelIndicator',
+    'AXProgressIndicator',
+    'AXSeparator',
+    'AXSplitter',
+    'AXHandle',
+    'AXRuler',
+    'AXRulerMarker',
+    'AXBusyIndicator',
+    'AXRelevanceIndicator',
+    'AXSizeHandle',
+    'AXResizeIndicator',
 }

@@ -2,6 +2,7 @@
 WatchDog Service for monitoring macOS Accessibility events.
 Delegates to the ax module's EventObserver for the underlying AXObserver management.
 """
+
 from macos_use.ax import EventObserver
 from typing import Callable, Optional
 import logging

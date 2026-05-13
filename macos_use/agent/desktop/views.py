@@ -1,5 +1,4 @@
-from macos_use.agent.tree.views import BoundingBox
-from macos_use.agent.tree.views import TreeState
+from macos_use.agent.tree.views import BoundingBox, TreeState
 from dataclasses import dataclass
 from PIL.Image import Image
 from typing import Union
@@ -7,7 +6,8 @@ from enum import Enum
 
 
 class Browser(Enum):
-    """Supported browser applications."""
+    """Supported browser applications kept for backwards compatibility."""
+
     SAFARI = 'com.apple.Safari'
     CHROME = 'com.google.Chrome'
     FIREFOX = 'org.mozilla.firefox'
@@ -50,10 +50,10 @@ class Window:
 
 @dataclass
 class DesktopState:
-    active_window: Window|None
+    active_window: Window | None
     windows: list[Window]
-    screenshot: [Union[Image, bytes, None]]=None
-    tree_state: TreeState|None=None
+    screenshot: Union[Image, bytes, None] = None
+    tree_state: TreeState | None = None
 
     def windows_to_string(self) -> str:
         """Format windows list for display."""

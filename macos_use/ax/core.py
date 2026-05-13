@@ -78,10 +78,13 @@ from ApplicationServices import (
     AXUIElementIsAttributeSettable,
     AXUIElementCopyElementAtPosition,
     AXUIElementCopyMultipleAttributeValues,
+    AXUIElementCopyParameterizedAttributeValue,
     AXUIElementGetPid,
     AXUIElementSetMessagingTimeout,
     AXIsProcessTrusted,
     AXIsProcessTrustedWithOptions,
+    AXValueCreate,
+    AXValueGetType,
     kAXErrorSuccess,
     kAXCopyMultipleAttributeOptionStopOnError,
 )
@@ -90,14 +93,7 @@ from Cocoa import NSWorkspace
 if TYPE_CHECKING:
     from macos_use.ax.controls import ApplicationControl, Control, WindowControl
 
-from .enums import (
-    AXError,
-    AXValueType,
-    Attribute,
-    KeyCode,
-    KEY_NAME_TO_CODE,
-    MODIFIER_KEY_MAP,
-)
+from .enums import AXValueType, Attribute, KeyCode, KEY_NAME_TO_CODE, MODIFIER_KEY_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -251,7 +247,7 @@ def IsAccessibilityEnabledWithPrompt() -> bool:
 
     Returns True if the process is trusted.
     """
-    from CoreFoundation import CFDictionaryCreate, kCFBooleanTrue
+    from CoreFoundation import kCFBooleanTrue
     options = {
         'AXTrustedCheckOptionPrompt': kCFBooleanTrue,
     }
@@ -276,15 +272,48 @@ def GetAttribute(element: Any, attribute: str) -> Optional[Any]:
     return None
 
 
+def GetParameterizedAttribute(
+    element: Any, attribute: str, parameter: Any
+) -> Optional[Any]:
+    """
+    Get a parameterized attribute value from an AXUIElement.
+    Returns None if the attribute is not available or an error occurs.
+    """
+    try:
+        error, value = AXUIElementCopyParameterizedAttributeValue(
+            element, attribute, parameter, None
+        )
+        if error == kAXErrorSuccess:
+            return value
+    except Exception:
+        pass
+    return None
+
+
 def SetAttribute(element: Any, attribute: str, value: Any) -> bool:
     """
     Set an attribute value on an AXUIElement.
     Returns True if successful.
     """
     try:
-        error = AXUIElementSetAttributeValue(element, attribute, value)
+        wrapped_value = value
+        if attribute == Attribute.Position and isinstance(value, (tuple, list)):
+            from Quartz import CGPointMake
+
+            wrapped_value = AXValueCreate(
+                AXValueType.CGPoint, CGPointMake(float(value[0]), float(value[1]))
+            )
+        elif attribute == Attribute.Size and isinstance(value, (tuple, list)):
+            from Quartz import CGSizeMake
+
+            wrapped_value = AXValueCreate(
+                AXValueType.CGSize, CGSizeMake(float(value[0]), float(value[1]))
+            )
+
+        error = AXUIElementSetAttributeValue(element, attribute, wrapped_value)
         return error == kAXErrorSuccess
-    except Exception:
+    except Exception as e:
+        logger.debug(f"SetAttribute error: {e}")
         return False
 
 
@@ -443,20 +472,86 @@ def GetRect(element: Any) -> Optional[Rect]:
     return None
 
 
-# Attributes fetched in one batch call per element during tree traversal.
-_TRAVERSAL_ATTRIBUTES = [
+# Phase-1 attributes fetched for every element: minimal set needed to decide
+# whether an element is interactive and to traverse its children.
+_EARLY_TRAVERSAL_ATTRIBUTES = [
     Attribute.Role,
-    Attribute.Subrole,
+    Attribute.Hidden,
     Attribute.Position,
     Attribute.Size,
-    Attribute.Hidden,
     Attribute.Enabled,
     Attribute.Help,
+    Attribute.HasPopup,
+    Attribute.TitleUIElement,
+    Attribute.Children,
+]
+
+# Phase-2 attributes fetched only for elements already identified as interactive.
+_LATE_TRAVERSAL_ATTRIBUTES = [
+    Attribute.Subrole,
     Attribute.Title,
     Attribute.Description,
     Attribute.Identifier,
     Attribute.Value,
+    Attribute.PlaceholderValue,
+    Attribute.URL,
+    Attribute.Filename,
+    Attribute.Expanded,
 ]
+
+_TRAVERSAL_ATTRIBUTES = _EARLY_TRAVERSAL_ATTRIBUTES + _LATE_TRAVERSAL_ATTRIBUTES
+
+
+def GetEarlyTraversalBatch(element: Any) -> dict:
+    """
+    Phase-1 batch: fetch the minimal attributes needed to decide interactivity and
+    obtain child elements for continued traversal.
+    """
+    raw = GetMultipleAttributeValues(element, _EARLY_TRAVERSAL_ATTRIBUTES)
+
+    pos = _parse_ax_position(raw.get(Attribute.Position))
+    size = _parse_ax_size(raw.get(Attribute.Size))
+    rect = Rect.from_position_size(pos[0], pos[1], size[0], size[1]) if pos and size else None
+    return {
+        'role': raw.get(Attribute.Role) or '',
+        'hidden': raw.get(Attribute.Hidden) is True,
+        'enabled': raw.get(Attribute.Enabled) is not False,
+        'help': raw.get(Attribute.Help) or '',
+        'has_popup': raw.get(Attribute.HasPopup) is True,
+        'title_ui_element': raw.get(Attribute.TitleUIElement),
+        'rect': rect,
+        'children': raw.get(Attribute.Children) or [],
+    }
+
+
+def GetLateTraversalBatch(element: Any) -> dict:
+    """
+    Phase-2 batch: fetch display and metadata attributes for interactive elements.
+    """
+    raw = GetMultipleAttributeValues(element, _LATE_TRAVERSAL_ATTRIBUTES)
+
+    title = raw.get(Attribute.Title) or ''
+    identifier = raw.get(Attribute.Identifier) or ''
+    description = raw.get(Attribute.Description) or ''
+    value = raw.get(Attribute.Value)
+    value_str = str(value) if value is not None else ''
+    label = title or description or value_str or identifier
+    url = raw.get(Attribute.URL)
+    filename = raw.get(Attribute.Filename)
+    placeholder = raw.get(Attribute.PlaceholderValue)
+
+    return {
+        'subrole': raw.get(Attribute.Subrole) or '',
+        'title': title,
+        'description': description,
+        'identifier': identifier,
+        'value': value,
+        'placeholder': str(placeholder) if placeholder is not None else None,
+        'url': str(url) if url is not None else None,
+        'filename': str(filename) if filename is not None else None,
+        'expanded': raw.get(Attribute.Expanded) is True,
+        'label': label,
+    }
 
 
 def GetTraversalBatch(element: Any) -> dict:
@@ -471,32 +566,9 @@ def GetTraversalBatch(element: Any) -> dict:
         role, subrole, hidden, enabled, help, title, description,
         identifier, value, label (computed), rect (Rect | None)
     """
-    raw = GetMultipleAttributeValues(element, _TRAVERSAL_ATTRIBUTES)
-
-    pos = _parse_ax_position(raw.get(Attribute.Position))
-    size = _parse_ax_size(raw.get(Attribute.Size))
-    rect = Rect.from_position_size(pos[0], pos[1], size[0], size[1]) if pos and size else None
-
-    title = raw.get(Attribute.Title) or ''
-    identifier = raw.get(Attribute.Identifier) or ''
-    description = raw.get(Attribute.Description) or ''
-    value = raw.get(Attribute.Value)
-    value_str = str(value) if value is not None else ''
-    label = title or identifier or description or value_str
-
-    return {
-        'role': raw.get(Attribute.Role) or '',
-        'subrole': raw.get(Attribute.Subrole) or '',
-        'hidden': raw.get(Attribute.Hidden) is True,
-        'enabled': raw.get(Attribute.Enabled) is not False,
-        'help': raw.get(Attribute.Help) or '',
-        'title': title,
-        'description': description,
-        'identifier': identifier,
-        'value': value,
-        'label': label,
-        'rect': rect,
-    }
+    early = GetEarlyTraversalBatch(element)
+    late = GetLateTraversalBatch(element)
+    return {**early, **late}
 
 
 def ElementAtPosition(application, x: float, y: float):
@@ -577,7 +649,6 @@ def GetMultipleAttributeValues(
                 # Detect AXValue error objects (kAXValueAXErrorType = 5)
                 if not isinstance(val, (str, bool, int, float, list, dict)):
                     try:
-                        from ApplicationServices import AXValueGetType
                         if AXValueGetType(val) == AXValueType.AXError:
                             continue
                     except Exception:
@@ -1637,17 +1708,22 @@ def ExecuteCommand(command: str, mode: str = 'shell', timeout: int = 10) -> Tupl
         Tuple of (output, return_code).
     """
     import os
+    import shlex
     env = os.environ.copy()
     try:
         if mode == 'osascript':
+            escaped_command = command.replace('"', '\\"')
             result = subprocess.run(
-                ['osascript', '-e', command],
+                ['osascript', '-e', escaped_command],
                 capture_output=True, text=True, timeout=timeout, env=env
             )
         else:
+            try:
+                args = shlex.split(command)
+            except ValueError as e:
+                return (f"Invalid command syntax: {e}", -1)
             result = subprocess.run(
-                command, shell=True,
-                capture_output=True, text=True, timeout=timeout, env=env
+                args, capture_output=True, text=True, timeout=timeout, env=env
             )
         output = result.stdout or result.stderr or ''
         return (output.strip(), result.returncode)

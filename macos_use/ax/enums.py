@@ -248,6 +248,10 @@ class Attribute:
     InsertionPointLineNumber = 'AXInsertionPointLineNumber'
     SharedTextUIElements = 'AXSharedTextUIElements'
     SharedCharacterRange = 'AXSharedCharacterRange'
+    StartTextMarker = 'AXStartTextMarker'
+    EndTextMarker = 'AXEndTextMarker'
+    SelectedTextMarkerRange = 'AXSelectedTextMarkerRange'
+    Language = 'AXLanguage'
 
     # Window-specific attributes
     Main = 'AXMain'
@@ -311,6 +315,7 @@ class Attribute:
     # Misc attributes
     Document = 'AXDocument'
     URL = 'AXURL'
+    Filename = 'AXFilename'
     LabelValue = 'AXLabelValue'
     LabelUIElements = 'AXLabelUIElements'
     PlaceholderValue = 'AXPlaceholderValue'
@@ -321,6 +326,7 @@ class Attribute:
     TitleUIElement = 'AXTitleUIElement'
     ServesAsTitleForUIElements = 'AXServesAsTitleForUIElements'
     IsApplicationRunning = 'AXIsApplicationRunning'
+    HasPopup = 'AXHasPopup'
 
     # Parameterized attributes (text)
     LineForIndex = 'AXLineForIndexParameterized'
@@ -332,6 +338,8 @@ class Attribute:
     AttributedStringForRange = 'AXAttributedStringForRangeParameterized'
     RTFForRange = 'AXRTFForRangeParameterized'
     StyleRangeForIndex = 'AXStyleRangeForIndexParameterized'
+    TextMarkerRangeForUnorderedTextMarkers = 'AXTextMarkerRangeForUnorderedTextMarkers'
+    StringForTextMarkerRange = 'AXStringForTextMarkerRange'
 
     # Date/Time field attributes
     AMPMField = 'AXAMPMField'

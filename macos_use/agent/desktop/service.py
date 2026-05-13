@@ -4,10 +4,12 @@ from macos_use.agent.tree.views import BoundingBox, TreeElementNode
 from PIL import Image, ImageDraw, ImageFont, ImageGrab
 from typing import Literal, Optional, Tuple, Union
 from macos_use.agent.tree.service import Tree
+from contextlib import contextmanager
 import macos_use.ax as ax
 import requests
 import logging
 import random
+import json
 import io
 import os
 import time
@@ -15,7 +17,15 @@ import time
 logger = logging.getLogger(__name__)
 
 class Desktop:
-    def __init__(self):
+    def __init__(
+        self,
+        use_vision: bool = False,
+        use_annotation: bool = False,
+        use_accessibility: bool = True,
+    ):
+        self.use_vision = use_vision
+        self.use_annotation = use_annotation
+        self.use_accessibility = use_accessibility
         self.tree = Tree()
         self.desktop_state = None
 
@@ -26,36 +36,89 @@ class Desktop:
 
     def get_state(
         self,
-        use_vision: bool = False,
         as_bytes: bool = False,
         scale: float = 1.0,
     ):
-        windows=self.get_windows()
-        active_window=self.get_foreground_window()
-        tree_state=self.tree.get_state(active_window=active_window)
-        if use_vision:
-            screenshot=self.get_annotated_screenshot(
-                nodes=tree_state.interactive_nodes,
-                as_bytes=as_bytes,
-                scale=scale,
-            )
+        windows = self.get_windows()
+        active_window = self.get_foreground_window()
+        tree_state = (
+            self.tree.get_state(active_window=active_window)
+            if self.use_accessibility
+            else None
+        )
+        if self.use_vision:
+            if self.use_annotation and tree_state:
+                screenshot = self.get_annotated_screenshot(
+                    nodes=tree_state.interactive_nodes,
+                    as_bytes=as_bytes,
+                    scale=scale,
+                )
+            else:
+                screenshot = self.get_screenshot(as_bytes=as_bytes)
         else:
-            screenshot=None
-        return DesktopState(
+            screenshot = None
+        self.desktop_state = DesktopState(
             active_window=active_window,
             windows=windows,
             screenshot=screenshot,
             tree_state=tree_state,
         )
+        return self.desktop_state
+
+    def get_dpi_scaling(self) -> float:
+        """Return the main display DPI scale."""
+        return ax.GetDPIScale()
+
+    def get_macos_version(self) -> str:
+        """Return the macOS version string."""
+        return ax.GetMacOSVersion()
+
+    def get_default_language(self) -> str:
+        """Return the system default language."""
+        return ax.GetDefaultLanguage()
+
+    def get_user_account_type(self) -> str:
+        """Return a coarse user account type for prompts."""
+        return "Admin" if os.geteuid() == 0 else "Standard"
+
+    @contextmanager
+    def auto_minimize(self):
+        """
+        Minimize the current frontmost window for the duration of the context,
+        then restore it afterwards when possible.
+        """
+        window = None
+        was_minimized = False
+        try:
+            app = ax.GetFrontmostApplication()
+            if app and app.MainWindow:
+                window = app.MainWindow
+                was_minimized = bool(window.IsMinimized)
+                if not was_minimized:
+                    try:
+                        window.Minimize()
+                        time.sleep(0.1)
+                    except Exception:
+                        window = None
+            yield
+        finally:
+            if window and not was_minimized:
+                try:
+                    window.Unminimize()
+                    time.sleep(0.1)
+                    if app:
+                        ax.ActivateApplication(app.PID)
+                except Exception:
+                    pass
 
     def app(
         self,
-        mode: Literal['launch', 'resize', 'switch'] = 'launch',
+        mode: Literal['launch', 'resize', 'move', 'switch'] = 'launch',
         name: Optional[str] = None,
         window_loc: Optional[Tuple[int, int]] = None,
         window_size: Optional[Tuple[int, int]] = None,
     ) -> str:
-        """Manage applications: launch, resize, or switch focus."""
+        """Manage applications: launch, resize, move, or switch focus."""
         if mode == 'launch':
             if not name:
                 return "App name or bundle ID required for launch."
@@ -74,11 +137,19 @@ class Desktop:
             if not app or not app.MainWindow:
                 return "No frontmost window to resize."
             win = app.MainWindow
-            if window_loc:
-                win.MoveWindowTo(float(window_loc[0]), float(window_loc[1]))
-            if window_size:
-                win.Resize(float(window_size[0]), float(window_size[1]))
-            return "Window resized/moved."
+            if not window_size:
+                return "window_size required for resize mode."
+            win.Resize(float(window_size[0]), float(window_size[1]))
+            return "Window resized."
+        if mode == 'move':
+            app = ax.GetFrontmostApplication()
+            if not app or not app.MainWindow:
+                return "No frontmost window to move."
+            win = app.MainWindow
+            if not window_loc:
+                return "window_loc required for move mode."
+            win.MoveWindowTo(float(window_loc[0]), float(window_loc[1]))
+            return "Window moved."
         return f"Unknown mode: {mode}"
 
     def execute_command(
@@ -89,6 +160,30 @@ class Desktop:
     ) -> Tuple[str, int]:
         """Execute a shell or AppleScript command."""
         return ax.ExecuteCommand(command, mode=mode, timeout=timeout)
+
+    def notify(
+        self,
+        message: str,
+        title: str = "Notification",
+        subtitle: Optional[str] = None,
+        sound: Optional[str] = None,
+    ) -> str:
+        """Send a macOS notification banner."""
+        import subprocess
+
+        script = (
+            f"display notification {json.dumps(message)} with title {json.dumps(title)}"
+        )
+        if subtitle:
+            script += f" subtitle {json.dumps(subtitle)}"
+        if sound:
+            script += f" sound name {json.dumps(sound)}"
+        result = subprocess.run(
+            ["osascript", "-e", script], capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return f"Notification sent: [{title}] {message}"
+        return f"Failed to send notification: {result.stderr.strip()}"
 
     def click(
         self,
@@ -182,7 +277,10 @@ class Desktop:
     def scrape(self, url: str) -> str:
         """Fetch URL content as text."""
         try:
-            r = requests.get(url, timeout=10)
+            headers = {
+                "User-Agent": "macOS-MCP/0.3.1 (macOS Desktop Automation MCP Server)"
+            }
+            r = requests.get(url, timeout=10, headers=headers)
             r.raise_for_status()
             return r.text
         except Exception as e:
@@ -193,16 +291,62 @@ class Desktop:
         time.sleep(duration)
 
     def get_foreground_window(self) -> Optional[Window]:
-        app=ax.GetFrontmostApplication()
+        FINDER_BUNDLE_ID = "com.apple.finder"
+        time.sleep(0.05)
+        pid = ax.GetMenuBarOwningApplication()
+        if not pid:
+            pid = ax.GetForegroundWindowPID()
+        if not pid:
+            pid_from_app = ax.GetFrontmostApplication()
+            if pid_from_app:
+                try:
+                    pid = pid_from_app.PID
+                except Exception:
+                    pid = None
+        app = None
+        if pid:
+            try:
+                from macos_use.ax.controls import ApplicationControl
+                app = ApplicationControl(pid=pid)
+            except Exception:
+                app = None
+        if app is None:
+            app = ax.GetRunningApplicationByBundleId(FINDER_BUNDLE_ID)
         if app is None:
             return None
-        window=app.MainWindow
+        window = None
+        try:
+            window = app.MainWindow
+        except Exception:
+            window = None
         if window is None:
-            return None
+            bundle_id = app.BundleIdentifier or FINDER_BUNDLE_ID
+            status_str = app.Status
+            try:
+                status = Status(status_str)
+            except ValueError:
+                status = Status.ACTIVE
+            if bundle_id != FINDER_BUNDLE_ID:
+                return Window(
+                    name=app.Name or bundle_id,
+                    is_browser=bundle_id in BROWSER_BUNDLE_IDS,
+                    status=status,
+                    bounding_box=BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0),
+                    pid=app.PID,
+                    bundle_id=bundle_id,
+                )
+            return Window(
+                name="Finder",
+                is_browser=False,
+                status=status,
+                bounding_box=BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0),
+                pid=app.PID,
+                bundle_id=bundle_id,
+            )
         is_browser = app.BundleIdentifier in BROWSER_BUNDLE_IDS
-        rect=window.BoundingRectangle
+        rect = window.BoundingRectangle
         if rect:
-            bounding_box=BoundingBox(
+            bounding_box = BoundingBox(
                 left=int(rect.left),
                 top=int(rect.top),
                 right=int(rect.right),
@@ -211,7 +355,7 @@ class Desktop:
                 height=int(rect.height),
             )
         else:
-            bounding_box=BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
+            bounding_box = BoundingBox(left=0, top=0, right=0, bottom=0, width=0, height=0)
         status_str = app.Status
         try:
             status = Status(status_str)

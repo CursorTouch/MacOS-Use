@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate on macOS
+    runs-on: macos-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Sync dependencies
+        run: uv sync --locked
+
+      - name: Compile source
+        run: uv run python -m compileall macos_use main.py
+
+      - name: Smoke check imports
+        run: |
+          uv run python - <<'PY'
+          from macos_use.agent.desktop.service import Desktop
+          from macos_use.agent.desktop.views import Browser
+          from macos_use.agent.service import Agent
+
+          desktop = Desktop(
+              use_vision=False,
+              use_annotation=False,
+              use_accessibility=True,
+          )
+
+          assert Browser.SAFARI.value == "com.apple.Safari"
+          assert hasattr(desktop, "auto_minimize")
+          assert hasattr(Agent, "invoke")
+          print("Smoke checks passed")
+          PY
