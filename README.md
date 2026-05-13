@@ -4,7 +4,9 @@
   <a href="https://github.com/CursorTouch/MacOS-Use/blob/master/LICENSE">
     <img src="https://img.shields.io/badge/license-MIT-green" alt="License">
   </a>
-  <img src="https://img.shields.io/pypi/dm/macos-use" alt="PyPI Downloads">
+  <a href="https://pepy.tech/projects/macos-use">
+    <img src="https://static.pepy.tech/badge/macos-use" alt="PyPI Downloads">
+  </a>
   <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/platform-macOS%2012%2B-blue" alt="Platform: macOS 12+">
   <img src="https://img.shields.io/github/last-commit/CursorTouch/MacOS-Use" alt="Last Commit">
