@@ -48,7 +48,7 @@ class Agent(BaseAgent):
         log_to_console: bool = True,
         event_subscriber: Callable[[AgentEvent], None] | None = None,
         experimental: bool = False,
-        disable_loop_detection: bool = False,
+        disable_loop_detection: bool = True,
     ):
         """
         Initialize the Agent.
@@ -68,7 +68,7 @@ class Agent(BaseAgent):
             log_to_console: Show intermediate steps in the console.
             event_subscriber: Optional callback for each agent event.
             experimental: Include experimental tools.
-            disable_loop_detection: Disable loop detection warnings. Defaults to False.
+            disable_loop_detection: Disable loop detection warnings. Defaults to True.
         """
         self.name = "MacOS Use"
         self.description = "An agent that can interact with GUI elements on macOS"
