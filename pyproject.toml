@@ -1,9 +1,37 @@
 [project]
 name = "macos-use"
-version = "0.1.0"
+version = "0.1.1"
 description = "Computer use agent for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Jeomon George" },
+]
+keywords = [
+    "macos",
+    "desktop-automation",
+    "gui-automation",
+    "ai-agent",
+    "computer-use",
+    "accessibility",
+    "llm",
+    "mcp",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: MacOS X",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Systems Administration",
+    "Topic :: Utilities",
+]
 dependencies = [
     "pyautogui>=0.9.54",
     "pyobjc-framework-Quartz>=10.1",
@@ -32,6 +60,12 @@ dependencies = [
     "pyobjc-core>=12.1",
     "pyobjc>=12.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CursorTouch/MacOS-Use"
+Repository = "https://github.com/CursorTouch/MacOS-Use"
+Issues = "https://github.com/CursorTouch/MacOS-Use/issues"
+Releases = "https://github.com/CursorTouch/MacOS-Use/releases"
 
 [project.scripts]
 macos-use = "macos_use.main:main"
