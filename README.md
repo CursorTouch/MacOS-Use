@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python">
   <img src="https://img.shields.io/badge/platform-macOS%2012%2B-blue" alt="Platform: macOS 12+">
   <img src="https://img.shields.io/github/last-commit/CursorTouch/MacOS-Use" alt="Last Commit">
+  <br>
   <a href="https://x.com/CursorTouch">
     <img src="https://img.shields.io/badge/follow-%40CursorTouch-1DA1F2?logo=twitter&style=flat" alt="Follow on Twitter">
   </a>
@@ -17,6 +18,8 @@
     <img src="https://img.shields.io/badge/Join%20on-Discord-5865F2?logo=discord&logoColor=white&style=flat" alt="Join us on Discord">
   </a>
 </div>
+
+<br>
 
 MacOS-Use is an AI agent that controls macOS at the GUI layer. It reads the screen via the macOS Accessibility API and uses any LLM to decide what to click, type, scroll, or run — no computer vision model required.
 

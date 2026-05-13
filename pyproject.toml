@@ -1,6 +1,6 @@
 [project]
 name = "macos-use"
-version = "0.1.1"
+version = "0.2.0"
 description = "Computer use agent for macOS"
 readme = "README.md"
 requires-python = ">=3.12"
